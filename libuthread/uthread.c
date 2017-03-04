@@ -4,69 +4,201 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/time.h>
 
 #define _UTHREAD_PRIVATE
 #include "context.h"
-#include "palloc.h"
-#include "preempt.h"
 #include "queue.h"
-#include "tls.h"
 #include "uthread.h"
 
+// global access array (all threads)
+// note: semaphore_queue always contains blocked ppl
+queue_t queue, semaphore_queue;		
+struct uthread_tcb* curThread, *cur_sem_thread;
+int thread_id = 0;
+sigset_t SavedMask;					
+
+
+typedef enum
+{
+	RUNNING,
+	READY,
+	BLOCKED,
+	TERMINATED
+} uthread_state_t;
+
+
 struct uthread_tcb {
-	/* TODO: PART 1 - Phase 2 */
-	/* TODO: PART 2 - Phase 3 */
+	uthread_ctx_t   *context;
+	void* 			stack;
+	uthread_state_t state;
+	int 			id;
 };
 
-void uthread_yield(void)
-{
-	/* TODO: PART 1 - Phase 2 */
-}
-
-int uthread_create(uthread_func_t func, void *arg)
-{
-	/* TODO: PART 1 - Phase 2 */
-}
-
-void uthread_exit(void)
-{
-	/* TODO: PART 1 - Phase 2 */
-}
-
-void uthread_block(void)
-{
-	/* TODO: PART 1 - Phase 2 */
-}
-
-void uthread_unblock(struct uthread_tcb *uthread)
-{
-	/* TODO: PART 1 - Phase 2 */
-}
-
-void *uthread_get_tls(void)
-{
-	/* TODO: PART 2 - Phase 3 */
-}
-
-void uthread_set_tls(void *tls)
-{
-	/* TODO: PART 2 - Phase 3 */
-}
 
 struct uthread_tcb *uthread_current(void)
 {
-	/* TODO: PART 1 - Phase 2 */
+	return curThread;
 }
+
+
+void uthread_yield(void)
+{
+	// save current state
+	struct uthread_tcb* cur_save = uthread_current();
+
+	// if the current state is running, then it hasnt
+	// finished its execution, so its we reset its 
+	// state to ready.
+	if (cur_save->state == RUNNING)
+		cur_save->state = READY;
+
+	// save oldest element in the queue
+	struct uthread_tcb *front;
+
+
+	if (queue_dequeue(queue, (void**) &front) == -1) {
+		fprintf(stderr, "Failure to dequeue from queue.\n");
+		return;
+	} //printf("id: %d\n", front->id);
+
+
+	// the oldest element in the queue is now ready 
+	// to be next thread in context execution but it
+	// had to have come from a ready state since it was queued
+	assert(front->state == READY);
+
+	// and is now the next context execution to run 
+	front->state = RUNNING;
+
+	// current thread becomes the new thread from queue
+	curThread = front;
+
+	// enqueue the old one to the back of the queue
+	if (cur_save->state == READY)
+	{		
+		queue_enqueue(queue, cur_save);
+		
+	}
+	
+	// switch context from the previous one 
+	// to the new one from the dequeue
+	uthread_ctx_switch(cur_save->context, front->context);
+	if (cur_save->state == TERMINATED) {
+		free(cur_save->context);
+		free(cur_save->stack);
+		free(cur_save);
+		cur_save = NULL;
+	}
+}
+
+
+int uthread_create(uthread_func_t func, void *arg)
+{
+	// initialize thread
+	struct uthread_tcb* thread = 
+				(struct uthread_tcb*)malloc(sizeof(struct uthread_tcb));
+	if (thread == NULL) {
+		fprintf(stderr, "Failure to allocate memory to thread tcb.\n");
+		return -1;
+	}
+
+	// initialize thread properties
+	thread->context = (uthread_ctx_t *)malloc(sizeof(uthread_ctx_t));
+	if (thread->context == NULL) {
+		fprintf(stderr, "Failure to allocate memory to context.\n");
+		return -1;
+	}
+	thread->state   = READY;
+	thread->id 		= thread_id++;
+	thread->stack   = uthread_ctx_alloc_stack();
+
+	// initialize thread execution context
+	if (uthread_ctx_init(thread->context, thread->stack, func, arg) == -1) {
+		fprintf(stderr, "Failure to initialize execution context");
+		return -1;
+	}
+
+	// enqueue thread
+	queue_enqueue(queue, thread);
+
+	return 0;
+}
+
+
+void uthread_exit(void)
+{
+	struct uthread_tcb *cur_running = uthread_current();
+
+	free(cur_running->context);
+	free(cur_running->stack);
+	cur_running->state = TERMINATED;
+
+	// goto next thread in queue
+	uthread_yield();
+}
+
+
+void uthread_block(void)
+{
+	curThread->state = BLOCKED;
+	uthread_yield();
+}
+
+
+void uthread_unblock(struct uthread_tcb *uthread)
+{
+	// must come from a blocked stated
+	assert(uthread->state == BLOCKED);
+
+	// find the thread in the queue and change state
+	uthread->state = READY;
+
+
+
+	// enqueue back into the queue 
+	queue_enqueue(queue, uthread);
+	
+}
+
 
 void uthread_start(uthread_func_t start, void *arg)
 {
-	/* TODO: PART 1 - Phase 2 */
-	/* TODO: PART 2 - Phase 3 */
-}
 
-void uthread_mem_config(size_t npages)
-{
-	palloc_configure(npages);
+	// initialize queue
+	queue = queue_create();
+	
+	if (queue == NULL) {
+		fprintf(stderr, "Failure to allocate memory to queue.\n");
+		return;
+	}
+
+	// initialize main idle thread and current thread
+	struct uthread_tcb* idle_thread = 
+				(struct uthread_tcb*)malloc(sizeof(struct uthread_tcb));
+	if (idle_thread == NULL) {
+		fprintf(stderr, "Failure to allocate memory to thread tcb.\n");
+		return;
+	}
+
+	// initialize thread properties
+	idle_thread->context = (uthread_ctx_t *)malloc(sizeof(uthread_ctx_t));
+	if (idle_thread->context == NULL) {
+		fprintf(stderr, "Failure to allocate memory to context.\n");
+		return;
+	}
+	idle_thread->state   = RUNNING;
+	idle_thread->id      = thread_id++;
+
+	// set current thread to
+	curThread = idle_thread;
+
+	if(uthread_create(start, arg) == -1) {
+		fprintf(stderr, "Error: fail to create idle_thread.\n");
+		return ;
+	}
+
+	// set idle 
+	while(queue_length(queue) != 0) 
+		uthread_yield();
 }

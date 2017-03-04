@@ -73,4 +73,3 @@ clean:
 	$(Q)rm -rf $(objs) $(deps) $(programs) README.html
 
 .PHONY: clean $(libuthread)
-

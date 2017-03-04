@@ -3,7 +3,6 @@
 
 #define _UTHREAD_PRIVATE
 #include "context.h"
-#include "preempt.h"
 #include "uthread.h"
 
 /* Size of the stack for a thread (in bytes) */
@@ -14,7 +13,7 @@ void uthread_ctx_switch(uthread_ctx_t *prev, uthread_ctx_t *next)
 	/*
 	 * swapcontext() saves the current context in structure pointer by @prev
 	 * and actives the context pointed by @next
-	 */
+	 */	
 	if (swapcontext(prev, next)) {
 		perror("swapcontext");
 		exit(1);
@@ -38,8 +37,6 @@ void uthread_ctx_destroy_stack(void *top_of_stack)
  */
 static void uthread_ctx_bootstrap(uthread_func_t func, void *arg)
 {
-	/* TODO: PART 1 - Phase 4 */
-
 	/* Execute thread and when done, exit */
 	func(arg);
 	uthread_exit();
@@ -72,4 +69,3 @@ int uthread_ctx_init(uthread_ctx_t *uctx, void *top_of_stack,
 
 	return 0;
 }
-
