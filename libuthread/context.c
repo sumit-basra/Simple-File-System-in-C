@@ -3,7 +3,7 @@
 
 #define _UTHREAD_PRIVATE
 #include "context.h"
-#include "preempt.h"
+//#include "preempt.h"
 #include "uthread.h"
 
 /* Size of the stack for a thread (in bytes) */

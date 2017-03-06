@@ -104,6 +104,7 @@ int fs_mount(const char *diskname) {
 	myRootDir = malloc(sizeof(struct rootdirectory_t) * 128);
 	if(block_read(FAT_blocks + 1, myRootDir) < 0) { // FAT_blocks is size of fat - Root Directory starts here.
 		fprintf(stderr, "Error: 4 - failure to read from block - fs_mount.\n");
+		return -1;
 	}
 	
 
