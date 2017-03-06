@@ -28,6 +28,7 @@ static struct disk disk = { .fd = INVALID_FD };
 int block_disk_create(const char *diskname, size_t bcount)
 {
 	int fd;
+	char buf[BLOCK_SIZE];
 
 	/* Parameter checking */
 	if (!diskname) {
@@ -79,7 +80,7 @@ int block_disk_open(const char *diskname)
 	}
 
 	if (st.st_size % BLOCK_SIZE != 0) {
-		block_error("size '%zu' is not multiple of '%d'",
+		block_error("size '%d' is not multiple of '%d'",
 			    st.st_size, BLOCK_SIZE);
 		return -1;
 	}
@@ -122,7 +123,7 @@ int block_write(size_t block, const void *buf)
 	}
 
 	if (block >= disk.bcount) {
-		block_error("block index out of bounds (%zu/%zu)",
+		block_error("block index out of bounds (%d/%d)",
 			    block, disk.bcount);
 		return -1;
 	}
@@ -148,7 +149,7 @@ int block_read(size_t block, void *buf)
 	}
 
 	if (block >= disk.bcount) {
-		block_error("block index out of bounds (%zu/%zu)",
+		block_error("block index out of bounds (%d/%d)",
 			    block, disk.bcount);
 		return -1;
 	}

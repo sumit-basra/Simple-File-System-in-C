@@ -33,50 +33,6 @@ struct thread_arg {
 	char **argv;
 };
 
-void thread_fs_stat(void *arg)
-{
-	struct thread_arg *t_arg = arg;
-	char *diskname, *filename;
-	int fs_fd;
-	size_t stat;
-
-	if (t_arg->argc < 2)
-		die("need <diskname> <filename>");
-
-	diskname = t_arg->argv[0];
-	filename = t_arg->argv[1];
-
-	if (fs_mount(diskname))
-		die("Cannot mount diskname");
-
-	fs_fd = fs_open(filename);
-	if (fs_fd < 0) {
-		fs_umount();
-		die("Cannot open file");
-	}
-
-	stat = fs_stat(fs_fd);
-	if (stat < 0) {
-		fs_umount();
-		die("Cannot stat file");
-	}
-	if (!stat) {
-		/* Nothing to read, file is empty */
-		printf("Empty file\n");
-		return;
-	}
-
-	if (fs_close(fs_fd)) {
-		fs_umount();
-		die("Cannot close file");
-	}
-
-	if (fs_umount())
-		die("cannot unmount diskname");
-
-	printf("Size of file '%s' is %zu bytes\n", filename, stat);
-}
-
 void thread_fs_cat(void *arg)
 {
 	struct thread_arg *t_arg = arg;
@@ -126,12 +82,11 @@ void thread_fs_cat(void *arg)
 	if (fs_umount())
 		die("cannot unmount diskname");
 
-	printf("Read file '%s' (%zu/%zu bytes)\n", filename, read, stat);
+	printf("Read file '%s' (%d/%d bytes)\n", filename, read, stat);
 	printf("Content of the file:\n%s", buf);
 
 	free(buf);
 }
-
 void thread_fs_rm(void *arg)
 {
 	struct thread_arg *t_arg = arg;
@@ -213,7 +168,7 @@ void thread_fs_add(void *arg)
 	if (fs_umount())
 		die("Cannot unmount diskname");
 
-	printf("Wrote file '%s' (%zu/%zu bytes)\n", filename, written,
+	printf("Wrote file '%s' (%d/%d bytes)\n", filename, written,
 	       st.st_size);
 
 	munmap(buf, st.st_size);
@@ -267,7 +222,6 @@ static struct {
 	{ "add",	thread_fs_add },
 	{ "rm",		thread_fs_rm },
 	{ "cat",	thread_fs_cat },
-	{ "stat",	thread_fs_stat },
 };
 
 void usage(void)
