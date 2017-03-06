@@ -76,26 +76,30 @@ int fs_mount(const char *diskname) {
 	
 	/* Error Checking */ 
 	if(block_read(0, mySuperblock) < 0){
-		fprintf(stderr, "Error: 0 - failure to read from block - fs_mount.\n");
+		fprintf(stderr, "Error0: failure to read from block - fs_mount.\n");
 		return -1;
 	}
-	char sig[9] = "ECS150FS";
-	if(mySuperblock->signature != sig) {
-		fprintf(stderr, "Error: 1 - incorrect signature - fs_mount.\n");
+	//printf("Signature: %s\n", mySuperblock->signature);
+
+	if(strncmp(mySuperblock->signature, "ECS150FS",8 ) !=0){
+		fprintf(stderr, "Error1: incorrect signature -fs_mount.\n");
 		return -1;
 	}
+
 	if(mySuperblock->numBlocks != block_disk_count()) {
-		fprintf(stderr, "Error: 2 - incorrect block disk count - fs_mount.\n");
+		fprintf(stderr, "Error2: incorrect block disk count - fs_mount.\n");
 		return -1;
 	}
 
 	/* FAT Creation */
 	int FAT_blocks = ((mySuperblock->numDataBlocks) * 2)/BLOCK_SIZE; // the size of the FAT (in terms of blocks)
+	if(FAT_blocks == 0)
+		FAT_blocks =1;
 	myFAT = malloc(sizeof(struct FAT_t) * FAT_blocks);
 	int i;
 	for(i = 1; i <= FAT_blocks; i++) {
 		if(block_read(i, myFAT + (i * BLOCK_SIZE)) < 0) {
-			fprintf(stderr, "Error: 3 - failure to read from block - fs_mount.\n");
+			fprintf(stderr, "Error3: failure to read from block - fs_mount.\n");
 			return -1;
 		}
 	}
@@ -107,9 +111,6 @@ int fs_mount(const char *diskname) {
 		return -1;
 	}
 	
-
-
-
 	return 0;
 	/* PART 3 - Phase 1 */
 }
@@ -142,9 +143,25 @@ int fs_umount(void) {
 /* Display some information about the currently mounted file system. */
 int fs_info(void) {
 
+	int FAT_blocks = ((mySuperblock->numDataBlocks) * 2)/BLOCK_SIZE; // the size of the FAT (in terms of blocks)
+	if(FAT_blocks == 0)
+		FAT_blocks =1;
 
+	int i, count;
+	for(i = 0; i < 127; i++) {
+		printf("Count: %d ,%04x\n",count, (myRootDir+(i * 31))->filename[0]);
+		if((myRootDir+(i * 31))->filename[0] == 0x00)
+			count++;
+	}
 
-
+	printf("FS Info:\n");
+	printf("total_blk_count=%d\n",mySuperblock->numBlocks);
+	printf("fat_blk_count=%d\n",FAT_blocks);
+	printf("rdir_blk=%d\n", FAT_blocks+1);
+	printf("data_blk=%d\n",FAT_blocks+2 );
+	printf("data_blk_count=%d\n", mySuperblock->numDataBlocks);
+	printf("fat_free_ratio=%d/%d\n", (mySuperblock->numDataBlocks - FAT_blocks),mySuperblock->numDataBlocks );
+	printf("rdir_free_ratio=%d/128\n",count);
 
 	return 0;
 	/* PART 3 - Phase 1 */
