@@ -9,7 +9,6 @@
 #include "fs.h"
 
 /* 
- * Describing the Data Structures correctly using stdint.h -> int8_t, uint8_t, uint16_t
  * 
  * Superblock:
  * The superblock is the first block of the file system. Its internal format is:
@@ -22,6 +21,8 @@
  * 0x10		1				Number of blocks for FAT
  * 0x11		4079			Unused/Padding
  *
+ *
+ *
  * FAT:
  * The FAT is a flat array, possibly spanning several blocks, which entries are composed of 16-bit unsigned words. 
  * There are as many entries as data *blocks in the disk.
@@ -33,8 +34,9 @@
  * 0x14		2				Index of the first data block
  * 0x16		10				Unused/Padding
  *
- *
  */
+
+typedef enum { false, true } bool;
 
 struct superblock_t {
     char signature[8];
@@ -46,35 +48,44 @@ struct superblock_t {
     uint8_t unused[4079];
 } __attribute__((packed));
 
+struct FAT_t {
+	uint16_t words;
+} __attribute__((packed));
+
 struct rootdirectory_t {
-	char filename[16];
+	char filename[FS_FILENAME_LEN];
 	int32_t fileSize;
 	int16_t dataBlockInd;
 	uint8_t unused[10];
 } __attribute__((packed));
 
-struct FAT_t {
-	uint16_t words;
-} __attribute__((packed));
+
+struct file_descriptor_t
+{
+    bool is_used;       
+    char file_index;              
+    int offset;           
+};
 
 
-struct superblock_t *mySuperblock;
-struct rootdirectory_t *myRootDir;
-struct FAT_t *myFAT;
+struct superblock_t      *mySuperblock;
+struct rootdirectory_t   *myRootDir;
+struct FAT_t             *myFAT;
+struct file_descriptor_t fd_table[FS_OPEN_MAX_COUNT]; 
 
 
 /* Makes the file system contained in the specified virtual disk "ready to be used" */
 int fs_mount(const char *diskname) {
-	
+
+	mySuperblock = malloc(sizeof(struct superblock_t));
+
+	// open disk 
 	if(block_disk_open(diskname) < 0){
 		fprintf(stderr, "Error - Failure to open disk - fs_mount.\n");
 		return -1;
 	}
 	
-	/* allocate superblock on virtual disk */
-	mySuperblock = malloc(sizeof(struct superblock_t));
-	
-	/* Error Checking */ 
+	// initialize data onto local super block 
 	if(block_read(0, mySuperblock) < 0){
 		fprintf(stderr, "Error0: failure to read from block - fs_mount.\n");
 		return -1;
@@ -95,9 +106,10 @@ int fs_mount(const char *diskname) {
 	int FAT_blocks = ((mySuperblock->numDataBlocks) * 2)/BLOCK_SIZE; // the size of the FAT (in terms of blocks)
 	if(FAT_blocks == 0)
 		FAT_blocks =1;
+
 	myFAT = malloc(sizeof(struct FAT_t) * FAT_blocks);
-	int i;
-	for(i = 1; i <= FAT_blocks; i++) {
+	for(int i = 1; i <= FAT_blocks; i++) {
+		// read each fat block in the disk starting at position 1
 		if(block_read(i, myFAT + (i * BLOCK_SIZE)) < 0) {
 			fprintf(stderr, "Error3: failure to read from block - fs_mount.\n");
 			return -1;
@@ -105,14 +117,13 @@ int fs_mount(const char *diskname) {
 	}
 
 	/* Root Directory Creation */
-	myRootDir = malloc(sizeof(struct rootdirectory_t) * 128);
+	myRootDir = malloc(sizeof(struct rootdirectory_t) * FS_FILE_MAX_COUNT);
 	if(block_read(FAT_blocks + 1, myRootDir) < 0) { // FAT_blocks is size of fat - Root Directory starts here.
 		fprintf(stderr, "Error: 4 - failure to read from block - fs_mount.\n");
 		return -1;
 	}
 	
 	return 0;
-	/* PART 3 - Phase 1 */
 }
 
 
@@ -131,7 +142,6 @@ int fs_umount(void) {
 	free(myFAT);
 	block_disk_close();
 	return 0;
-	/* PART 3 - Phase 1 */
 }
 
 /* 
@@ -167,18 +177,36 @@ int fs_info(void) {
 	/* PART 3 - Phase 1 */
 }
 
-int fs_create(const char *filename) {
 
+/*
+Add File:
+	0. If it is the first time around, the name needs to be set, and all other information gets reset.
+	1. Find an empty entry in the root directory.
+	2. Add information
+
+*/
+int fs_create(const char *filename) {
+	char loc = locate_file(filename);
+
+	
 	return 0;
 	/* TODO: PART 3 - Phase 2 */
 }
 
+/*
+Remove File:
+	1. Empty file entry and all its datablocks associated with file contents from FAT.
+
+*/
 int fs_delete(const char *filename) {
 	
 	return 0;
 	/* TODO: PART 3 - Phase 2 */
 }
 
+/*
+which prints the listing of all the files in the file system. Make sure that the output corresponds exactly to the reference program.
+*/
 int fs_ls(void) {
 	
 	return 0;
@@ -221,3 +249,18 @@ int fs_read(int fd, void *buf, size_t count) {
 	/* TODO: PART 3 - Phase 4 */
 }
 
+
+// returns the file index where the provided file
+// is located in the root directory 
+char locate_file(const char* file_name)
+{
+    char i;
+    for(i = 0; i < FS_FILE_MAX_COUNT; i++) {
+        if(strcmp(myRootDir[i].filename, file_name) == 0) {
+            return i;  
+        }
+    }
+
+    // file not found
+    return -1;      
+}
