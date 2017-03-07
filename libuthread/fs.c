@@ -67,7 +67,7 @@ struct file_descriptor_t
 {
     bool is_used;       
     int  file_index;              
-    int  offset;  
+    size_t  offset;  
 	char file_name[FS_FILENAME_LEN];         
 };
 
@@ -78,8 +78,8 @@ struct FAT_t             *myFAT;
 struct file_descriptor_t fd_table[FS_OPEN_MAX_COUNT]; 
 
 // private API
-int locate_first_file(const char* file_name);
-int locate_first_fd();
+int locate_file(const char* file_name);
+int locate_avail_fd();
 
 /* Makes the file system contained in the specified virtual disk "ready to be used" */
 int fs_mount(const char *diskname) {
@@ -181,7 +181,6 @@ int fs_info(void) {
 	int i, count = 0;
 
 	for(i = 0; i < 128; i++) {
-		printf("Count: %d ,%04x\n",count, (myRootDir + i)->filename[0]);
 		if((myRootDir + i)->filename[0] == 0x00)
 			count++;
 	}
@@ -209,7 +208,7 @@ Create a new file:
 int fs_create(const char *filename) {
 
 	// confirm non-existing filename
-	int file_index = locate_first_file(filename);
+	int file_index = locate_file(filename);
 
 	if (file_index >= 0) {
 		fprintf(stderr, "fs_create()\t error: file @[%s] already exists\n", filename);
@@ -244,7 +243,7 @@ Remove File:
 int fs_delete(const char *filename) {
 
 	// confirm existing filename
-	int file_index = locate_first_file(filename);
+	int file_index = locate_file(filename);
 
 	if (file_index == -1) {
 		fprintf(stderr, "fs_delete()\t error: file @[%s] doesnt exist\n", filename);
@@ -283,7 +282,8 @@ int fs_delete(const char *filename) {
 }
 
 /*
-which prints the listing of all the files in the file system. Make sure that the output corresponds exactly to the reference program.
+List all the existing files:
+	1. 
 */
 int fs_ls(void) {
 	
@@ -302,13 +302,13 @@ Open and return FD:
 */
 int fs_open(const char *filename) {
 
-    int file_index = locate_first_file(filename);
+    int file_index = locate_file(filename);
     if(file_index == -1) { 
         fprintf(stderr, "fs_open()\t error: file @[%s] doesnt exist\n", filename);
         return -1;
     } 
 
-    int fd = locate_first_fd();
+    int fd = locate_avail_fd();
     if (fd == -1){
 		fprintf(stderr, "fs_open()\t error: max file descriptors already allocated\n");
         return -1;
@@ -339,7 +339,7 @@ int fs_close(int fd) {
 
     struct file_descriptor_t *fd_obj = &fd_table[fd];
 
-    int file_index = locate_first_file(fd_obj->file_name);
+    int file_index = locate_file(fd_obj->file_name);
     if(file_index == -1) { 
         fprintf(stderr, "fs_close()\t error: file @[%s] doesnt exist\n", fd_obj->file_name);
         return -1;
@@ -351,16 +351,51 @@ int fs_close(int fd) {
 	return 0;
 }
 
+/*
+	1. Return the size of the file corresponding to the specified file descriptor.
+*/
 int fs_stat(int fd) {
+    if(fd >= FS_OPEN_MAX_COUNT || fd < 0 || fd_table[fd].is_used == false) {
+		fprintf(stderr, "fs_stat()\t error: invalid file descriptor supplied \n");
+        return -1;
+    }
 
-	return 0;
-	/* TODO: PART 3 - Phase 3 */
+    struct file_descriptor_t *fd_obj = &fd_table[fd];
+
+    int file_index = locate_file(fd_obj->file_name);
+    if(file_index == -1) { 
+        fprintf(stderr, "fs_close()\t error: file @[%s] doesnt exist\n", fd_obj->file_name);
+        return -1;
+    } 
+
+	return myRootDir[file_index].fileSize;
 }
 
+/*
+Move supplied fd to supplied offset
+	1. Make sure the offset is valid: cannot be less than zero, nor can 
+	   it exceed the size of the file itself.
+*/
 int fs_lseek(int fd, size_t offset) {
+	struct file_descriptor_t *fd_obj = &fd_table[fd];
+    int file_index = locate_file(fd_obj->file_name);
+    if(file_index == -1) { 
+        fprintf(stderr, "fs_lseek()\t error: file @[%s] doesnt exist\n", fd_obj->file_name);
+        return -1;
+    } 
+
+	int32_t file_size = fs_stat(fd);
 	
+	if (offset < 0 || offset > file_size) {
+        fprintf(stderr, "fs_lseek()\t error: file @[%s] is out of bounds \n", fd_obj->file_name);
+        return -1;
+	} else if (fd_table[fd].is_used == false) {
+        fprintf(stderr, "fs_lseek()\t error: invalid file descriptor [%s] \n", fd_obj->file_name);
+        return -1;
+	} 
+
+	fd_table[fd].offset = offset;
 	return 0;
-	/* TODO: PART 3 - Phase 3 */
 }
 
 int fs_write(int fd, void *buf, size_t count) {
@@ -375,10 +410,10 @@ int fs_read(int fd, void *buf, size_t count) {
 	/* TODO: PART 3 - Phase 4 */
 }
 
-// find first open file??
+
 // returns the file index where the provided file
 // is located in the root directory 
-int locate_first_file(const char* file_name)
+int locate_file(const char* file_name)
 {
     for(int i = 0; i < FS_FILE_MAX_COUNT; i++) 
         if(strcmp(myRootDir[i].filename, file_name) == 0) 
@@ -386,7 +421,7 @@ int locate_first_file(const char* file_name)
     return -1;      
 }
 
-int locate_first_fd()
+int locate_avail_fd()
 {
 	for(int i = 0; i < FS_OPEN_MAX_COUNT; i++) 
         if(fd_table[i].is_used == false) 
