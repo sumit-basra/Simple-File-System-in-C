@@ -57,9 +57,8 @@ struct rootdirectory_t {
 	char    filename[FS_FILENAME_LEN];
 	int32_t fileSize;
 	int16_t dataBlockInd;
-	bool 	is_used;
 	uint8_t num_fd_pointers;
-	uint8_t unused[8];
+	uint8_t unused[9];
 } __attribute__((packed));
 
 
@@ -68,7 +67,8 @@ struct file_descriptor_t
     bool is_used;       
     int  file_index;              
     size_t  offset;  
-	char file_name[FS_FILENAME_LEN];         
+	char file_name[FS_FILENAME_LEN];
+	struct rootdirectory_t *dir_ptr;         
 };
 
 
@@ -131,9 +131,11 @@ int fs_mount(const char *diskname) {
 	}
 	
 	// initialize file descriptors 
-    for(int i = 0; i < FS_OPEN_MAX_COUNT; i++) 
-        fd_table[i].is_used = false;
-    
+    for(int i = 0; i < FS_OPEN_MAX_COUNT; i++) {
+		fd_table[i].is_used = false;
+		fd_table[i].dir_ptr = NULL;
+	}
+        
 
 	return 0;
 }
@@ -200,6 +202,7 @@ int fs_info(void) {
 
 /*
 Create a new file:
+	0. Make sure we don't duplicate files, by checking for existings.
 	1. Find an empty entry in the root directory.
 	2. The name needs to be set, and all other information needs to get reset.
 		2.2 Intitially the size is 0 and pointer to first data block is FAT_EOC.
@@ -207,7 +210,6 @@ Create a new file:
 
 int fs_create(const char *filename) {
 
-	// confirm non-existing filename
 	int file_index = locate_file(filename);
 
 	if (file_index >= 0) {
@@ -215,14 +217,13 @@ int fs_create(const char *filename) {
         return -1;
 	} 
 
-	// finds first available file block in root dir 
+	// finds first available empty file
 	for(int i = 0; i < FS_FILE_MAX_COUNT; i++) {
-		if(myRootDir[i].is_used == false) {
-			
-			// WHERE DOES FAT_EOC go?
+		if(myRootDir[i].filename[0] == 0x00) {
+			myRootDir[i].dataBlockInd = myFAT[0].words;
+
 			// initialize file data 
 			strcpy(myRootDir[i].filename, filename);
-			myRootDir[i].is_used         = true;
 			myRootDir[i].fileSize        = 0;
 			myRootDir[i].dataBlockInd    = -1;
 			myRootDir[i].num_fd_pointers = 0;
@@ -258,8 +259,7 @@ int fs_delete(const char *filename) {
 	}
 
 	// reset file to blank slate
-	strcpy(the_file->filename, "");
-	the_file->is_used 		  = false;
+	strcpy(the_file->filename, "\0");
 	the_file->fileSize        = 0;
 	the_file->num_fd_pointers = 0;
 
@@ -411,12 +411,16 @@ int fs_read(int fd, void *buf, size_t count) {
 }
 
 
-// returns the file index where the provided file
-// is located in the root directory 
+/*
+Locate Existing File
+	1. Return the first filename that matches the search,
+	   and is in use (contains data).
+*/
 int locate_file(const char* file_name)
 {
     for(int i = 0; i < FS_FILE_MAX_COUNT; i++) 
-        if(strcmp(myRootDir[i].filename, file_name) == 0) 
+        if(strcmp(myRootDir[i].filename, file_name) == 0 && 
+			      myRootDir[i].filename == 0x00) 
             return i;  
     return -1;      
 }
