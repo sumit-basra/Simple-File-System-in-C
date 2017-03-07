@@ -251,39 +251,59 @@ int fs_delete(const char *filename) {
 	int file_index = locate_file(filename);
 
 	if (file_index == -1) {
-		fs_error("file @[%s] doesnt exist\n", filename);
+		fs_error("fs_delete()\t error: file @[%s] doesnt exist\n", filename);
         return -1;
 	}
 
-	struct rootdirectory_t* the_file = &myRootDir[file_index]; 
-	if (the_file->num_fd_pointers > 0) { 
-		fs_error("cannot remove file @[%s],\
+	struct rootdirectory_t* the_dir = &myRootDir[file_index]; 
+	if (the_dir->num_fd_pointers > 0) { 
+		fs_error("fs_delete()\t error: cannot remove file @[%s],\
 						 as it is currently open\n", filename);
 		return -1;
 	}
 
-	// reset file to blank slate
-	strcpy(the_file->filename, "\0");
-	the_file->fileSize        = 0;
-	the_file->num_fd_pointers = 0;
-
-
-	// free associated blocks 
-
-	/*	
-		what I think we should do:
-		1. find starting index from fat table 
-		2. place the contents of the files into a buffer that is of size BLOCK BLOCK_SIZE
-		3. do a block read, and place the contents of the block into that buffer given (1)
-		4. modify the contents somehow
-		5. continue iterate through the blocks until null 
-		6. then do a block write with the buffers you modified.
-
-		just brainstorming
+	/*
+	Free associated blocks 
+		1. Get the starting data index block from the file (FAT Table)
+		2. Calculate the number of block it has, given its size
+		3. Read in the first data blocks from the super block (there are two of them)
+		4. Iterate through each block that is associated with the file 
+			4.1 If the blocks index is within the bounds of the block, set the buffer to 
+			    at that location to null signal a free entry.
+			4.2 If the block is otherwise out of bounds of the block, set its offset to null.
+			4.3 Find the next block
+		5. Write to block with new changes 
+		6. Reset file attribute data
 	*/
+	int frst_dta_blk_i = the_dir->dataBlockInd;
+	int num_blocks = the_dir->fileSize / BLOCK_SIZE;
 
-	return 0;
-}
+	char buf1[BLOCK_SIZE] = "";
+	char buf2[BLOCK_SIZE] = "";
+
+	block_read(mySuperblock->dataInd, buf1);
+	block_read(mySuperblock->dataInd + 1, buf2);
+
+	for (int i = 0; i < num_blocks; i++) {
+		if (frst_dta_blk_i < BLOCK_SIZE)
+			buf1[frst_dta_blk_i] = '\0';
+		else buf2[frst_dta_blk_i - BLOCK_SIZE] = '\0';
+		
+		// todo: implement find_next_block
+		//frst_dta_blk_i = find_next_block(the_dir->dataBlockInd, file_index);
+	}
+
+	myRootDir[file_index].dataBlockInd = -1;
+
+	block_write(mySuperblock->dataInd, buf1);
+	block_write(mySuperblock->dataInd + 1, buf2);
+
+	// reset file to blank slate
+	strcpy(the_dir->filename, "\0");
+	the_dir->fileSize        = 0;
+	the_dir->num_fd_pointers = 0;
+
+return 0;
 
 /*
 List all the existing files:
@@ -418,10 +438,44 @@ int fs_write(int fd, void *buf, size_t count) {
 	/* TODO: PART 3 - Phase 4 */
 }
 
+/*
+Read a File:
+	1. Error check that the amount to be read is > 0, and that the
+	   the file descriptor is valid.
+*/
 int fs_read(int fd, void *buf, size_t count) {
+	
+    if(fd_table[fd].is_used == false || count <= 0) {
+		fs_error("fs_read()\t error: invalid file descriptor [%d] or count <= 0\n", fd);
+        return -1;
+    }
+
+	// gather nessessary information 
+	char *file_name = fd_table[fd].file_name;
+	size_t cur_offset = fd_table[fd].offset;
+	int file_index = locate_file(file_name);
+	
+	struct rootdirectory_t *the_dir = &myRootDir[file_index];
+	int frst_dta_blk_i = the_dir->dataBlockInd;
+	
+	int num_blocks = 0;
+
+	// get to the correct offset by continuing 
+	// to read past block by block 
+	while (cur_offset >= BLOCK_SIZE) {
+		// todo: implement find_next_block
+		//frst_dta_blk_i = find_next_block(the_dir->dataBlockInd, file_index);
+		num_blocks++;
+		cur_offset -= BLOCK_SIZE;
+	}
+
+	// the finally do a read once your at the proper block index
+	char *read_buf = buf;
+	block_read(frst_dta_blk_i, read_buf);
+
+
 
 	return 0;
-	/* TODO: PART 3 - Phase 4 */
 }
 
 
