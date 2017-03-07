@@ -67,7 +67,8 @@ struct file_descriptor_t
 {
     bool is_used;       
     int  file_index;              
-    int  offset;           
+    int  offset;  
+	char file_name[FS_FILENAME_LEN];         
 };
 
 
@@ -87,23 +88,23 @@ int fs_mount(const char *diskname) {
 
 	// open disk 
 	if(block_disk_open(diskname) < 0){
-		fprintf(stderr, "Error - Failure to open disk - fs_mount.\n");
+		fprintf(stderr, "fs_mount()\t error: failure to open virtual disk \n");
 		return -1;
 	}
 	
 	// initialize data onto local super block 
 	if(block_read(0, mySuperblock) < 0){
-		fprintf(stderr, "Error0: failure to read from block - fs_mount.\n");
+		fprintf(stderr, "fs_mount()\t error: failure to read from block \n");
 		return -1;
 	}
 
 	if(strncmp(mySuperblock->signature, "ECS150FS",8 ) !=0){
-		fprintf(stderr, "Error1: incorrect signature -fs_mount.\n");
+		fprintf(stderr, "fs_mount()\t error: invalid disk signature \n");
 		return -1;
 	}
 
 	if(mySuperblock->numBlocks != block_disk_count()) {
-		fprintf(stderr, "Error2: incorrect block disk count - fs_mount.\n");
+		fprintf(stderr, "fs_mount()\t error: incorrect block disk count \n");
 		return -1;
 	}
 
@@ -117,7 +118,7 @@ int fs_mount(const char *diskname) {
 	for(int i = 1; i <= FAT_blocks; i++) {
 		// read each fat block in the disk starting at position 1
 		if(block_read(i, myFAT + (i * BLOCK_SIZE)) < 0) {
-			fprintf(stderr, "Error3: failure to read from block - fs_mount.\n");
+			fprintf(stderr, "fs_mount()\t error: failure to read from block \n");
 			return -1;
 		}
 	}
@@ -125,7 +126,7 @@ int fs_mount(const char *diskname) {
 	// root directory creation
 	myRootDir = malloc(sizeof(struct rootdirectory_t) * FS_FILE_MAX_COUNT);
 	if(block_read(FAT_blocks + 1, myRootDir) < 0) { // FAT_blocks is size of fat - Root Directory starts here.
-		fprintf(stderr, "Error: 4 - failure to read from block - fs_mount.\n");
+		fprintf(stderr, "fs_mount()\t error: failure to read from block \n");
 		return -1;
 	}
 	
@@ -142,7 +143,7 @@ int fs_mount(const char *diskname) {
 int fs_umount(void) {
 
 	if(!mySuperblock){
-		fprintf(stderr, "Error: No disk available to unmount - fs_unmount.\n");
+		fprintf(stderr, "fs_umount()\t error: No disk available to unmount\n");
 		return -1;
 	}
 
@@ -157,6 +158,7 @@ int fs_umount(void) {
 		fd_table[i].offset = 0;
 		fd_table[i].is_used = false;
 		fd_table[i].file_index = -1;
+		strcpy(fd_table[i].file_name, "");
     }
 
 	block_disk_close();
@@ -167,7 +169,6 @@ int fs_umount(void) {
  * to create a test file system call ./fs.x make test.fs 8192 to 
  * make a virtual disk with 8192 datablocks) 
  */
-
 
 /* Display some information about the currently mounted file system. */
 int fs_info(void) {
@@ -257,7 +258,7 @@ int fs_delete(const char *filename) {
 		return -1;
 	}
 
-	// reset file to blank slate 
+	// reset file to blank slate
 	strcpy(the_file->filename, "");
 	the_file->is_used 		  = false;
 	the_file->fileSize        = 0;
@@ -295,6 +296,7 @@ Open and return FD:
 	1. Find the file
 	2. Find an available file descriptor
 		2.1 Mark the particular descriptor in_use, and remaining other properties
+			2.1.1 Set offset or current reading position to 0
 		2.2 Increment number of file scriptors to of requested file object
 	3. Return file descriptor index, or other wise -1 on failure
 */
@@ -314,7 +316,9 @@ int fs_open(const char *filename) {
 
 	fd_table[file_index].is_used = true;
 	fd_table[file_index].file_index = file_index;
-	//fd_table[file_index].offset = 0; ?????
+	fd_table[file_index].offset = 0;
+	strcpy(fd_table[file_index].file_name, filename); 
+
     myRootDir[file_index].num_fd_pointers++;
     return fd;
 
@@ -335,11 +339,13 @@ int fs_close(int fd) {
 
     struct file_descriptor_t *fd_obj = &fd_table[fd];
 
-	// todo:
-	// add filename char pointer for file name object, then do
+    int file_index = locate_first_file(fd_obj->file_name);
+    if(file_index == -1) { 
+        fprintf(stderr, "fs_close()\t error: file @[%s] doesnt exist\n", fd_obj->file_name);
+        return -1;
+    } 
 
-	//int file_index = locate_file(fd_obj->file_name);
-    //myRootDir[file_index].num_fd_pointers--;
+    myRootDir[file_index].num_fd_pointers--;
     fd_obj->is_used = false;
 
 	return 0;
