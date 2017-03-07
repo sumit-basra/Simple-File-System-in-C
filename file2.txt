@@ -1,0 +1,3 @@
+Test file2 for virtualdisk
+Line
+Line

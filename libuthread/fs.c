@@ -212,15 +212,16 @@ int fs_create(const char *filename) {
 
 	int file_index = locate_file(filename);
 
-	if (file_index >= 0) {
+	if (file_index ==-1) {
 		fprintf(stderr, "fs_create()\t error: file @[%s] already exists\n", filename);
         return -1;
 	} 
 
 	// finds first available empty file
 	for(int i = 0; i < FS_FILE_MAX_COUNT; i++) {
-		if(myRootDir[i].filename[0] == 0x00) {
-			myRootDir[i].dataBlockInd = myFAT[0].words;
+		if((myRootDir+i)->filename[0] == 0x00) {
+			//printf("Here\n");
+			(myRootDir+i)->dataBlockInd = myFAT[0].words;
 
 			// initialize file data 
 			strcpy(myRootDir[i].filename, filename);
@@ -241,6 +242,7 @@ Remove File:
 	2. Free associated data blocks
 
 */
+
 int fs_delete(const char *filename) {
 
 	// confirm existing filename
@@ -286,7 +288,17 @@ List all the existing files:
 	1. 
 */
 int fs_ls(void) {
-	
+
+	printf("FS LS:\n");
+	// finds first available file block in root dir 
+	for(int i = 0; i < FS_FILE_MAX_COUNT; i++) {
+		if((myRootDir + i)->filename[0] != 0x00) {
+			printf("file: %s, size: %d, ", (myRootDir + i)->filename,(myRootDir + i)->fileSize);
+			printf("data_blk: %d\n", (myRootDir + i)->dataBlockInd);
+														
+		}
+	}	
+
 	return 0;
 	/* TODO: PART 3 - Phase 2 */
 }
