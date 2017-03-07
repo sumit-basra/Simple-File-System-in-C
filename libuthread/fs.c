@@ -8,6 +8,13 @@
 #include "disk.h"
 #include "fs.h"
 
+
+// Very nicely display "Function Source of error: the error message"
+#define fs_error(fmt, ...) \
+	fprintf(stderr, "%s: ERROR-"fmt"\n", __func__, ##__VA_ARGS__)
+
+
+
 /* 
  * 
  * Superblock:
@@ -35,6 +42,7 @@
  * 0x16		10				Unused/Padding
  *
  */
+int error_check(const char *filename);
 
 typedef enum { false, true } bool;
 
@@ -56,7 +64,7 @@ struct FAT_t {
 struct rootdirectory_t {
 	char    filename[FS_FILENAME_LEN];
 	int32_t fileSize;
-	int16_t dataBlockInd; // head
+	int16_t dataBlockInd;
 	uint8_t num_fd_pointers;
 	uint8_t unused[9];
 } __attribute__((packed));
@@ -68,7 +76,7 @@ struct file_descriptor_t
     int  file_index;              
     size_t  offset;  
 	char file_name[FS_FILENAME_LEN];
-	//struct rootdirectory_t *dir_ptr;         
+	struct rootdirectory_t *dir_ptr;         
 };
 
 
@@ -88,23 +96,23 @@ int fs_mount(const char *diskname) {
 
 	// open disk 
 	if(block_disk_open(diskname) < 0){
-		fprintf(stderr, "fs_mount()\t error: failure to open virtual disk \n");
+		fs_error("failure to open virtual disk \n");
 		return -1;
 	}
 	
 	// initialize data onto local super block 
 	if(block_read(0, mySuperblock) < 0){
-		fprintf(stderr, "fs_mount()\t error: failure to read from block \n");
+		fs_error( "failure to read from block \n");
 		return -1;
 	}
 
 	if(strncmp(mySuperblock->signature, "ECS150FS",8 ) !=0){
-		fprintf(stderr, "fs_mount()\t error: invalid disk signature \n");
+		fs_error( "invalid disk signature \n");
 		return -1;
 	}
 
 	if(mySuperblock->numBlocks != block_disk_count()) {
-		fprintf(stderr, "fs_mount()\t error: incorrect block disk count \n");
+		fs_error("incorrect block disk count \n");
 		return -1;
 	}
 
@@ -118,22 +126,22 @@ int fs_mount(const char *diskname) {
 	for(int i = 1; i <= FAT_blocks; i++) {
 		// read each fat block in the disk starting at position 1
 		if(block_read(i, myFAT + (i * BLOCK_SIZE)) < 0) {
-			fprintf(stderr, "fs_mount()\t error: failure to read from block \n");
+			fs_error("failure to read from block \n");
 			return -1;
 		}
 	}
 
 	// root directory creation
 	myRootDir = malloc(sizeof(struct rootdirectory_t) * FS_FILE_MAX_COUNT);
-	if(block_read(FAT_blocks + 1, myRootDir) < 0) {
-		fprintf(stderr, "fs_mount()\t error: failure to read from block \n");
+	if(block_read(FAT_blocks + 1, myRootDir) < 0) { // FAT_blocks is size of fat - Root Directory starts here.
+		fs_error("failure to read from block \n");
 		return -1;
 	}
 	
 	// initialize file descriptors 
     for(int i = 0; i < FS_OPEN_MAX_COUNT; i++) {
 		fd_table[i].is_used = false;
-		//fd_table[i].dir_ptr = NULL;
+		fd_table[i].dir_ptr = NULL;
 	}
         
 
@@ -145,7 +153,7 @@ int fs_mount(const char *diskname) {
 int fs_umount(void) {
 
 	if(!mySuperblock){
-		fprintf(stderr, "fs_umount()\t error: No disk available to unmount\n");
+		fs_error("No disk available to unmount\n");
 		return -1;
 	}
 
@@ -210,12 +218,8 @@ Create a new file:
 
 int fs_create(const char *filename) {
 
-	int file_index = locate_file(filename);
-
-	if (file_index ==-1) {
-		fprintf(stderr, "fs_create()\t error: file @[%s] already exists\n", filename);
-        return -1;
-	} 
+	// perform error checking first 
+	error_check(filename);
 
 	// finds first available empty file
 	for(int i = 0; i < FS_FILE_MAX_COUNT; i++) {
@@ -224,15 +228,13 @@ int fs_create(const char *filename) {
 			(myRootDir+i)->dataBlockInd = myFAT[0].words;
 
 			// initialize file data 
-			strcpy(myRootDir[i].filename, filename);
+			strcpy((myRootDir+i)->filename, filename);
 			myRootDir[i].fileSize        = 0;
 			myRootDir[i].dataBlockInd    = -1;
 			myRootDir[i].num_fd_pointers = 0;
 			return 0;
 		}
 	}
-
-	fprintf(stderr, "fs_create()\t error: exceeded FS_FILE_MAX_COUNT.\n");
 	return -1;
 }
 
@@ -240,6 +242,7 @@ int fs_create(const char *filename) {
 Remove File:
 	1. Empty file entry and all its datablocks associated with file contents from FAT.
 	2. Free associated data blocks
+
 */
 
 int fs_delete(const char *filename) {
@@ -248,57 +251,36 @@ int fs_delete(const char *filename) {
 	int file_index = locate_file(filename);
 
 	if (file_index == -1) {
-		fprintf(stderr, "fs_delete()\t error: file @[%s] doesnt exist\n", filename);
+		fs_error("file @[%s] doesnt exist\n", filename);
         return -1;
 	}
 
-	struct rootdirectory_t* the_dir = &myRootDir[file_index]; 
-	if (the_dir->num_fd_pointers > 0) { 
-		fprintf(stderr, "fs_delete()\t error: cannot remove file @[%s],\
+	struct rootdirectory_t* the_file = &myRootDir[file_index]; 
+	if (the_file->num_fd_pointers > 0) { 
+		fs_error("cannot remove file @[%s],\
 						 as it is currently open\n", filename);
 		return -1;
 	}
 
-	/*
-	Free associated blocks 
-		1. Get the starting data index block from the file (FAT Table)
-		2. Calculate the number of block it has, given its size
-		3. Read in the first data blocks from the super block (there are two of them)
-		4. Iterate through each block that is associated with the file 
-			4.1 If the blocks index is within the bounds of the block, set the buffer to 
-			    at that location to null signal a free entry.
-			4.2 If the block is otherwise out of bounds of the block, set its offset to null.
-			4.3 Find the next block
-		5. Write to block with new changes 
-		6. Reset file attribute data
-	*/
-	int frst_dta_blk_i = the_dir->dataBlockInd;
-	int num_blocks = the_dir->fileSize / BLOCK_SIZE;
-
-	char buf1[BLOCK_SIZE] = "";
-	char buf2[BLOCK_SIZE] = "";
-
-	block_read(mySuperblock->dataInd, buf1);
-	block_read(mySuperblock->dataInd + 1, buf2);
-
-	for (int i = 0; i < num_blocks; i++) {
-		if (frst_dta_blk_i < BLOCK_SIZE)
-			buf1[frst_dta_blk_i] = '\0';
-		else buf2[frst_dta_blk_i - BLOCK_SIZE] = '\0';
-		
-		// todo: implement find_next_block
-		//frst_dta_blk_i = find_next_block(the_dir->dataBlockInd, file_index);
-	}
-
-	myRootDir[file_index].dataBlockInd = -1;
-
-	block_write(mySuperblock->dataInd, buf1);
-	block_write(mySuperblock->dataInd + 1, buf2);
-
 	// reset file to blank slate
-	strcpy(the_dir->filename, "\0");
-	the_dir->fileSize        = 0;
-	the_dir->num_fd_pointers = 0;
+	strcpy(the_file->filename, "\0");
+	the_file->fileSize        = 0;
+	the_file->num_fd_pointers = 0;
+
+
+	// free associated blocks 
+
+	/*	
+		what I think we should do:
+		1. find starting index from fat table 
+		2. place the contents of the files into a buffer that is of size BLOCK BLOCK_SIZE
+		3. do a block read, and place the contents of the block into that buffer given (1)
+		4. modify the contents somehow
+		5. continue iterate through the blocks until null 
+		6. then do a block write with the buffers you modified.
+
+		just brainstorming
+	*/
 
 	return 0;
 }
@@ -336,13 +318,13 @@ int fs_open(const char *filename) {
 
     int file_index = locate_file(filename);
     if(file_index == -1) { 
-        fprintf(stderr, "fs_open()\t error: file @[%s] doesnt exist\n", filename);
+        fs_error("file @[%s] doesnt exist\n", filename);
         return -1;
     } 
 
     int fd = locate_avail_fd();
     if (fd == -1){
-		fprintf(stderr, "fs_open()\t error: max file descriptors already allocated\n");
+		fs_error("max file descriptors already allocated\n");
         return -1;
     }
 
@@ -365,7 +347,7 @@ Close FD object:
 */
 int fs_close(int fd) {
     if(fd >= FS_OPEN_MAX_COUNT || fd < 0 || fd_table[fd].is_used == false) {
-		fprintf(stderr, "fs_close()\t error: invalid file descriptor supplied \n");
+		fs_error("invalid file descriptor supplied \n");
         return -1;
     }
 
@@ -373,7 +355,7 @@ int fs_close(int fd) {
 
     int file_index = locate_file(fd_obj->file_name);
     if(file_index == -1) { 
-        fprintf(stderr, "fs_close()\t error: file @[%s] doesnt exist\n", fd_obj->file_name);
+        fs_error("file @[%s] doesnt exist\n", fd_obj->file_name);
         return -1;
     } 
 
@@ -388,7 +370,7 @@ int fs_close(int fd) {
 */
 int fs_stat(int fd) {
     if(fd >= FS_OPEN_MAX_COUNT || fd < 0 || fd_table[fd].is_used == false) {
-		fprintf(stderr, "fs_stat()\t error: invalid file descriptor supplied \n");
+		fs_error("invalid file descriptor supplied \n");
         return -1;
     }
 
@@ -396,7 +378,7 @@ int fs_stat(int fd) {
 
     int file_index = locate_file(fd_obj->file_name);
     if(file_index == -1) { 
-        fprintf(stderr, "fs_close()\t error: file @[%s] doesnt exist\n", fd_obj->file_name);
+        fs_error("file @[%s] doesnt exist\n", fd_obj->file_name);
         return -1;
     } 
 
@@ -412,17 +394,17 @@ int fs_lseek(int fd, size_t offset) {
 	struct file_descriptor_t *fd_obj = &fd_table[fd];
     int file_index = locate_file(fd_obj->file_name);
     if(file_index == -1) { 
-        fprintf(stderr, "fs_lseek()\t error: file @[%s] doesnt exist\n", fd_obj->file_name);
+        fs_error("file @[%s] doesnt exist\n", fd_obj->file_name);
         return -1;
     } 
 
 	int32_t file_size = fs_stat(fd);
 	
 	if (offset < 0 || offset > file_size) {
-        fprintf(stderr, "fs_lseek()\t error: file @[%s] is out of bounds \n", fd_obj->file_name);
+        fs_error("file @[%s] is out of bounds \n", fd_obj->file_name);
         return -1;
 	} else if (fd_table[fd].is_used == false) {
-        fprintf(stderr, "fs_lseek()\t error: invalid file descriptor [%s] \n", fd_obj->file_name);
+        fs_error("invalid file descriptor [%s] \n", fd_obj->file_name);
         return -1;
 	} 
 
@@ -436,44 +418,10 @@ int fs_write(int fd, void *buf, size_t count) {
 	/* TODO: PART 3 - Phase 4 */
 }
 
-/*
-Read a File:
-	1. Error check that the amount to be read is > 0, and that the
-	   the file descriptor is valid.
-*/
 int fs_read(int fd, void *buf, size_t count) {
-	
-    if(fd_table[fd].is_used == false || count <= 0) {
-		fprintf(stderr, "fs_read()\t error: invalid file descriptor [%d] or count <= 0\n", fd);
-        return -1;
-    }
-
-	// gather nessessary information 
-	char *file_name = fd_table[fd].file_name;
-	size_t cur_offset = fd_table[fd].offset;
-	int file_index = locate_file(file_name);
-	
-	struct rootdirectory_t *the_dir = &myRootDir[file_index];
-	int frst_dta_blk_i = the_dir->dataBlockInd;
-	
-	int num_blocks = 0;
-
-	// get to the correct offset by continuing 
-	// to read past block by block 
-	while (cur_offset >= BLOCK_SIZE) {
-		// todo: implement find_next_block
-		//frst_dta_blk_i = find_next_block(the_dir->dataBlockInd, file_index);
-		num_blocks++;
-		cur_offset -= BLOCK_SIZE;
-	}
-
-	// the finally do a read once your at the proper block index
-	char *read_buf = buf;
-	block_read(frst_dta_blk_i, read_buf);
-
-
 
 	return 0;
+	/* TODO: PART 3 - Phase 4 */
 }
 
 
@@ -485,8 +433,8 @@ Locate Existing File
 int locate_file(const char* file_name)
 {
     for(int i = 0; i < FS_FILE_MAX_COUNT; i++) 
-        if(strcmp(myRootDir[i].filename, file_name) == 0 && 
-			      myRootDir[i].filename != 0x00) 
+        if(strcmp((myRootDir + i)->filename, file_name) == 0 &&  // strcmp doesn't work
+			      (myRootDir + i)->filename != 0x00) 
             return i;  
     return -1;      
 }
@@ -497,4 +445,48 @@ int locate_avail_fd()
         if(fd_table[i].is_used == false) 
 			return i; 
     return -1;
+}
+
+
+/*
+ * Perform Error Checking 
+ * 1) Check if file length>16
+ * 2) Check if file already exists 
+ * 3) Check if root directory has max number of files 
+*/
+int error_check(const char *filename){
+
+	// get size 
+	int size = strlen(filename);
+	if(size > FS_FILENAME_LEN){
+		fs_error("File name is longer than FS_FILE_MAX_COUNT\n");
+		return -1;
+	}
+
+	// check if file already exists 
+	int same_char = 0;
+	int files_in_rootdir = 0;
+	for(int i = 0; i < FS_FILE_MAX_COUNT; i++){
+		for(int j = 0; j < size; j ++){
+			if((myRootDir + i)->filename[j] == filename[j])
+				same_char++;
+		}
+		if((myRootDir + i)->filename[0] != 0x00)
+			files_in_rootdir++;
+	}
+	// File already exists
+	if(same_char == size){
+		fs_error("file @[%s] already exists\n", filename);
+		return -1;
+	}
+		
+
+	// if there are 128 files in rootdirectory 
+	if(files_in_rootdir == FS_FILE_MAX_COUNT){
+		fs_error("All files in rootdirectory are taken\n");
+		return -1;
+	}
+		
+
+	return 0;
 }
