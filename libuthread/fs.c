@@ -232,6 +232,8 @@ int fs_create(const char *filename) {
 			myRootDir[i].fileSize        = 0;
 			myRootDir[i].dataBlockInd    = -1;
 			myRootDir[i].num_fd_pointers = 0;
+			// for debugging purposes
+			printf("Created file: '%s' (%d/%d bytes)\n",(myRootDir+i)->filename,myRootDir[i].fileSize,myRootDir[i].fileSize  );
 			return 0;
 		}
 	}
@@ -251,13 +253,13 @@ int fs_delete(const char *filename) {
 	int file_index = locate_file(filename);
 
 	if (file_index == -1) {
-		fs_error("fs_delete()\t error: file @[%s] doesnt exist\n", filename);
+		fs_error("file @[%s] doesnt exist\n", filename);
         return -1;
 	}
 
 	struct rootdirectory_t* the_dir = &myRootDir[file_index]; 
 	if (the_dir->num_fd_pointers > 0) { 
-		fs_error("fs_delete()\t error: cannot remove file @[%s],\
+		fs_error("cannot remove file @[%s],\
 						 as it is currently open\n", filename);
 		return -1;
 	}
@@ -281,8 +283,8 @@ int fs_delete(const char *filename) {
 	char buf1[BLOCK_SIZE] = "";
 	char buf2[BLOCK_SIZE] = "";
 
-	block_read(mySuperblock->dataInd, buf1);
-	block_read(mySuperblock->dataInd + 1, buf2);
+	block_read(mySuperblock->dataInd, buf1);		//??
+	block_read(mySuperblock->dataInd + 1, buf2);	//??
 
 	for (int i = 0; i < num_blocks; i++) {
 		if (frst_dta_blk_i < BLOCK_SIZE)
@@ -305,6 +307,7 @@ int fs_delete(const char *filename) {
 
 return 0;
 
+}
 /*
 List all the existing files:
 	1. 
@@ -515,7 +518,7 @@ int error_check(const char *filename){
 	if(size > FS_FILENAME_LEN){
 		fs_error("File name is longer than FS_FILE_MAX_COUNT\n");
 		return -1;
-	}
+		}
 
 	// check if file already exists 
 	int same_char = 0;
@@ -527,19 +530,19 @@ int error_check(const char *filename){
 		}
 		if((myRootDir + i)->filename[0] != 0x00)
 			files_in_rootdir++;
-	}
+		}
 	// File already exists
 	if(same_char == size){
 		fs_error("file @[%s] already exists\n", filename);
 		return -1;
-	}
+		}
 		
 
 	// if there are 128 files in rootdirectory 
 	if(files_in_rootdir == FS_FILE_MAX_COUNT){
 		fs_error("All files in rootdirectory are taken\n");
 		return -1;
-	}
+		}
 		
 
 	return 0;
