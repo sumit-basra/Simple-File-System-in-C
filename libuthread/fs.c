@@ -42,7 +42,6 @@
  * 0x16		10				Unused/Padding
  *
  */
-int error_check(const char *filename);
 
 typedef enum { false, true } bool;
 
@@ -65,17 +64,15 @@ struct rootdirectory_t {
 	char    filename[FS_FILENAME_LEN];
 	int32_t fileSize;
 	int16_t dataBlockInd;
-	uint8_t num_fd_pointers;
-	uint8_t unused[9];
+	uint8_t unused[10];
 } __attribute__((packed));
 
 
-struct file_descriptor_t
-{
-    bool is_used;       
-    int  file_index;              
-    size_t  offset;  
-	char file_name[FS_FILENAME_LEN];
+struct file_descriptor_t {
+    bool   is_used;       
+    int    file_index;              
+    size_t offset;  
+	char   file_name[FS_FILENAME_LEN];
 	struct rootdirectory_t *dir_ptr;         
 };
 
@@ -86,6 +83,7 @@ struct FAT_t             *myFAT;
 struct file_descriptor_t fd_table[FS_OPEN_MAX_COUNT]; 
 
 // private API
+int error_check(const char *filename);
 int locate_file(const char* file_name);
 int locate_avail_fd();
 
@@ -106,7 +104,7 @@ int fs_mount(const char *diskname) {
 		return -1;
 	}
 
-	if(strncmp(mySuperblock->signature, "ECS150FS",8 ) !=0){
+	if(strncmp(mySuperblock->signature, "ECS150FS", 8) != 0){
 		fs_error( "invalid disk signature \n");
 		return -1;
 	}
@@ -157,9 +155,7 @@ int fs_umount(void) {
 		return -1;
 	}
 
-	free(mySuperblock->signature);
 	free(mySuperblock);
-	free(myRootDir->filename);
 	free(myRootDir);
 	free(myFAT);
 
@@ -184,14 +180,15 @@ int fs_umount(void) {
 int fs_info(void) {
 
     // the size of the FAT (in terms of blocks)
+    // we can use the superblock var = numFAT. 
 	int FAT_blocks = ((mySuperblock->numDataBlocks) * 2)/BLOCK_SIZE; 
 	if(FAT_blocks == 0)
-		FAT_blocks =1;
+		FAT_blocks = 1;
 
 	int i, count = 0;
 
 	for(i = 0; i < 128; i++) {
-		if((myRootDir + i)->filename[0] == 0x00)
+		if(myRootDir[i].filename[0] == 0x00)
 			count++;
 	}
 
@@ -219,19 +216,21 @@ Create a new file:
 int fs_create(const char *filename) {
 
 	// perform error checking first 
-	error_check(filename);
+	if(error_check(filename) < 0)
+		return -1;
+
 
 	// finds first available empty file
 	for(int i = 0; i < FS_FILE_MAX_COUNT; i++) {
-		if((myRootDir+i)->filename[0] == 0x00) {
-			//printf("Here\n");
-			(myRootDir+i)->dataBlockInd = myFAT[0].words;
+		if(myRootDir[i].filename[0] == 0x00) {	
 
 			// initialize file data 
-			strcpy((myRootDir+i)->filename, filename);
+			strcpy(myRootDir[i].filename, filename);
+			//printf("Filename: %s\n", myRootDir[i].filename);
 			myRootDir[i].fileSize        = 0;
 			myRootDir[i].dataBlockInd    = -1;
-			myRootDir[i].num_fd_pointers = 0;
+			myRootDir[i].dataBlockInd    = myFAT[0].words;
+
 			// for debugging purposes
 			printf("Created file: '%s' (%d/%d bytes)\n",(myRootDir+i)->filename,myRootDir[i].fileSize,myRootDir[i].fileSize  );
 			return 0;
@@ -258,11 +257,14 @@ int fs_delete(const char *filename) {
 	}
 
 	struct rootdirectory_t* the_dir = &myRootDir[file_index]; 
-	if (the_dir->num_fd_pointers > 0) { 
-		fs_error("cannot remove file @[%s],\
-						 as it is currently open\n", filename);
-		return -1;
+	int i;
+	for(i = 0; i < FS_OPEN_MAX_COUNT; i++) {
+		if(strncmp(the_dir->filename, fd_table[i].file_name, FS_FILENAME_LEN) == 0) {
+			fs_error("cannot remove file @[%s] as it is currently open\n", filename);
+			return -1;
+		}
 	}
+
 
 	/*
 	Free associated blocks 
@@ -303,7 +305,7 @@ int fs_delete(const char *filename) {
 	// reset file to blank slate
 	strcpy(the_dir->filename, "\0");
 	the_dir->fileSize        = 0;
-	the_dir->num_fd_pointers = 0;
+	//the_dir->num_fd_pointers = 0;
 
 return 0;
 
@@ -314,18 +316,22 @@ List all the existing files:
 */
 int fs_ls(void) {
 
-	printf("FS LS:\n");
+	printf("FS Ls:\n");
 	// finds first available file block in root dir 
+
 	for(int i = 0; i < FS_FILE_MAX_COUNT; i++) {
-		if((myRootDir + i)->filename[0] != 0x00) {
-			printf("file: %s, size: %d, ", (myRootDir + i)->filename,(myRootDir + i)->fileSize);
+		printf("Filename: %s\n", myRootDir[i].filename);
+
+		if(myRootDir[i].filename[0] != 0x00) {
+
+			printf("file: %s, size: %d, ", myRootDir[i].filename, myRootDir[i].fileSize);
 			printf("data_blk: %d\n", (myRootDir + i)->dataBlockInd);
 														
 		}
 	}	
 
 	return 0;
-	/* TODO: PART 3 - Phase 2 */
+	/* PART 3 - Phase 2 */
 }
 
 /*
@@ -351,12 +357,12 @@ int fs_open(const char *filename) {
         return -1;
     }
 
-	fd_table[file_index].is_used = true;
-	fd_table[file_index].file_index = file_index;
-	fd_table[file_index].offset = 0;
-	strcpy(fd_table[file_index].file_name, filename); 
+	fd_table[fd].is_used    = true;
+	fd_table[fd].file_index = file_index;
+	fd_table[fd].offset     = 0;
+	
+	strcpy(fd_table[fd].file_name, filename); 
 
-    myRootDir[file_index].num_fd_pointers++;
     return fd;
 
 }
@@ -369,7 +375,8 @@ Close FD object:
 	4. Mark FD as available for use
 */
 int fs_close(int fd) {
-    if(fd >= FS_OPEN_MAX_COUNT || fd < 0 || fd_table[fd].is_used == false) {
+
+    if(fd >= FS_OPEN_MAX_COUNT || fd < 0 || fd_table[fd].is_used == 0) {
 		fs_error("invalid file descriptor supplied \n");
         return -1;
     }
@@ -382,7 +389,6 @@ int fs_close(int fd) {
         return -1;
     } 
 
-    myRootDir[file_index].num_fd_pointers--;
     fd_obj->is_used = false;
 
 	return 0;
@@ -487,18 +493,19 @@ Locate Existing File
 	1. Return the first filename that matches the search,
 	   and is in use (contains data).
 */
-int locate_file(const char* file_name)
-{
-    for(int i = 0; i < FS_FILE_MAX_COUNT; i++) 
-        if(strcmp((myRootDir + i)->filename, file_name) == 0 &&  // strcmp doesn't work
+int locate_file(const char* file_name) {
+	int i;
+    for(i = 0; i < FS_FILE_MAX_COUNT; i++) 
+        if(strncmp((myRootDir + i)->filename, file_name, FS_FILENAME_LEN) == 0 &&  
 			      (myRootDir + i)->filename != 0x00) 
             return i;  
     return -1;      
 }
 
-int locate_avail_fd()
-{
-	for(int i = 0; i < FS_OPEN_MAX_COUNT; i++) 
+
+int locate_avail_fd() {
+	int i;
+	for(i = 0; i < FS_OPEN_MAX_COUNT; i++) 
         if(fd_table[i].is_used == false) 
 			return i; 
     return -1;
@@ -511,6 +518,7 @@ int locate_avail_fd()
  * 2) Check if file already exists 
  * 3) Check if root directory has max number of files 
 */
+
 int error_check(const char *filename){
 
 	// get size 
@@ -542,7 +550,7 @@ int error_check(const char *filename){
 	if(files_in_rootdir == FS_FILE_MAX_COUNT){
 		fs_error("All files in rootdirectory are taken\n");
 		return -1;
-		}
+	}
 		
 
 	return 0;
