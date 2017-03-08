@@ -27,11 +27,12 @@ CUR_PWD := $(shell pwd)
 CC	= gcc
 
 # General gcc options
-CFLAGS	:= -Wall -Werror
+CFLAGS	:= -Wall -Werror 
 CFLAGS	+= -O2
 #CFLAGS	+= -O0
 #CFLAGS	+= -g
 CFLAGS	+= -pipe
+CFLAGS	+= -lm
 
 # Include path
 INCLUDE := -I$(UTHREADLIB)

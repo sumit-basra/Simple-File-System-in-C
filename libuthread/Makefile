@@ -1,4 +1,4 @@
-CFLAGS  = -g -Wall -Werror
+CFLAGS  = -g -Wall -Werror -lm
 
 all: libuthread.a
 
@@ -15,7 +15,7 @@ uthread.o: uthread.c uthread.h
 	gcc $(CFLAGS) -c uthread.c
 
 fs.o: fs.c fs.h
-	gcc $(CFLAGS) -c fs.c
+	gcc $(CFLAGS) -c fs.c -lm
 
 disk.o: disk.c disk.h
 	gcc $(CFLAGS) -c disk.c
