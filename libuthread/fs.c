@@ -15,7 +15,7 @@
 	fprintf(stderr, "%s: ERROR-"fmt"\n", __func__, ##__VA_ARGS__)
 
 #define EOC 0xFFFF
-#define EMPTY 0x00
+#define EMPTY 0
 
 /* 
  * 
@@ -58,12 +58,12 @@ struct superblock_t {
 } __attribute__((packed));
 
 
-struct FAT_t {
-	uint16_t words;
-} __attribute__((packed));			// if this is all you have for fat, then just make it  uint16_t *myFat;
+//struct FAT_t {
+	uint16_t *FAT_entry;
+//} __attribute__((packed));			// if this is all you have for fat, then just make it  uint16_t *myFat;
 
 struct rootdirectory_t {
-	char    filename[FS_FILENAME_LEN];
+	char    filename[FS_FILENAME_LEN];	// don't use chars, cast as char when needed	
 	int32_t fileSize;
 	int16_t dataBlockInd;
 	uint8_t unused[10];
@@ -81,7 +81,7 @@ struct file_descriptor_t {
 
 struct superblock_t      *mySuperblock;
 struct rootdirectory_t   *myRootDir;
-struct FAT_t             *myFAT;
+//struct FAT_t             *myFAT;
 struct file_descriptor_t fd_table[FS_OPEN_MAX_COUNT]; 
 
 // private API
@@ -126,23 +126,33 @@ int fs_mount(const char *diskname) {
 	// the size of the FAT (in terms of blocks)
 	//int num_FAT_blocks = ceil(double((mySuperblock->numDataBlocks * 2)) / BLOCK_SIZE); 
 	//int num_FAT_blocks = mySuperblock->numFAT;
-	int num_FAT_blocks = (mySuperblock->numDataBlocks * 2) / BLOCK_SIZE;
-	if(num_FAT_blocks == 0)
-		num_FAT_blocks =1;
-
-	myFAT = malloc(sizeof(struct FAT_t) * num_FAT_blocks);
-	for(int i = 1; i <= num_FAT_blocks; i++) {
+	//int num_FAT_blocks = (mySuperblock->numDataBlocks * 2) / BLOCK_SIZE;
+	//if(num_FAT_blocks == 0)
+	//	num_FAT_blocks =1;
+	
+	static uint8_t buffer[BLOCK_SIZE];
+	//uint16_t *temp;
+	FAT_entry = malloc(2* mySuperblock->numDataBlocks);		// 2 bytes * number of datablocks
+	int keep_track = 0;
+	for(int i = 1; i < mySuperblock->rootDirInd; i++) {
 		// read each fat block in the disk starting at position 1
-		if(block_read(i, myFAT + (i * BLOCK_SIZE)) < 0) {
+
+		if(block_read(i, (void *) buffer) < 0) {
 			fs_error("failure to read from block \n");
 			return -1;
 		}
-	}
+		
+		for(int j = 0; j*2 < BLOCK_SIZE; j++){
+			//temp = (((uint16_t*) buffer) + j);
+			FAT_entry[keep_track] = *(((uint16_t*) buffer) + j);                                        
+			keep_track++;
+		}
+		}
 
 	// root directory creation
-	myRootDir = malloc(sizeof(struct rootdirectory_t) * FS_FILE_MAX_COUNT);
+	myRootDir = (struct rootdirectory_t*) malloc(sizeof(struct rootdirectory_t) * FS_FILE_MAX_COUNT);
 	// FAT_blocks is size of fat - Root Directory starts here.
-	if(block_read(num_FAT_blocks + 1, myRootDir) < 0) { 
+	if(block_read(mySuperblock->numFAT + 1, myRootDir) < 0) { 
 		fs_error("failure to read from block \n");
 		return -1;
 	}
@@ -173,21 +183,21 @@ int fs_umount(void) {
 
 	// write FAT
 	for(int i = 1; i <= mySuperblock->numFAT; i++) {
-		if(block_write(i, myFAT + (i * BLOCK_SIZE)) < 0) {
+		if(block_write(i, FAT_entry + (i * BLOCK_SIZE)) < 0) {
 			fs_error("failure to write to block \n");
 			return -1;
 		}
 	}
 
 	// write root dir 
-	if(block_write(mySuperblock->numFAT + 1, myFAT) < 0){
+	if(block_write(mySuperblock->numFAT + 1, FAT_entry) < 0){
 		fs_error("failure to write to block \n");
 		return -1;
 	}
 
 	free(mySuperblock);
 	free(myRootDir);
-	free(myFAT);
+	free(FAT_entry);
 
 	// reset file descriptors
     for(int i = 0; i < FS_OPEN_MAX_COUNT; i++) {
@@ -210,10 +220,10 @@ int fs_info(void) {
 
     // the size of the FAT (in terms of blocks)
     // we can use the superblock var = numFAT. 
-	int FAT_blocks = ((mySuperblock->numDataBlocks) * 2)/BLOCK_SIZE;  // use ceil to round up
+	//int FAT_blocks = ((mySuperblock->numDataBlocks) * 2)/BLOCK_SIZE;  // use ceil to round up
 	//int FAT_blocks = mySuperblock->numFAT;
-	if(FAT_blocks == 0)
-		FAT_blocks = 1;
+	//if(FAT_blocks == 0)
+	//	FAT_blocks = 1;
 
 	int i, count = 0;
 
@@ -225,9 +235,9 @@ int fs_info(void) {
 
 	printf("FS Info:\n");
 	printf("total_blk_count=%d\n", mySuperblock->numBlocks);
-	printf("fat_blk_count=%d\n", FAT_blocks);
-	printf("rdir_blk=%d\n", FAT_blocks + 1);
-	printf("data_blk=%d\n", FAT_blocks + 2);
+	printf("fat_blk_count=%d\n", mySuperblock->numFAT);
+	printf("rdir_blk=%d\n", mySuperblock->numFAT + 1);
+	printf("data_blk=%d\n", mySuperblock->numFAT + 2);
 	printf("data_blk_count=%d\n", mySuperblock->numDataBlocks);
 	printf("fat_free_ratio=%d/%d\n", get_num_FAT_free_blocks(), mySuperblock->numDataBlocks);
 	printf("rdir_free_ratio=%d/128\n", count);
@@ -665,7 +675,9 @@ int get_num_FAT_free_blocks()
 {
 	int count = 0;
 	for (int i = 0; i < mySuperblock->numDataBlocks; i++) {
-		if (myFAT[i].words == EMPTY) count++;
+		if (FAT_entry[i] == EMPTY) count++;
 	}
 	return count;
+
 }
+
