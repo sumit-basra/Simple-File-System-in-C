@@ -155,6 +155,21 @@ int fs_umount(void) {
 		return -1;
 	}
 
+	if(block_write(0, mySuperblock) < 0) {
+		fs_error("failure to write to block \n");
+		return -1;
+	}
+	for(int i = 1; i <= mySuperblock->numFAT; i++) {
+		if(block_write(i, myFAT + (i * BLOCK_SIZE)) < 0) {
+			fs_error("failure to write to block \n");
+			return -1;
+		}
+	}
+	if(block_write(mySuperblock->numFAT + 1, myFAT) < 0){
+		fs_error("failure to write to block \n");
+		return -1;
+	}
+
 	free(mySuperblock);
 	free(myRootDir);
 	free(myFAT);
@@ -188,18 +203,19 @@ int fs_info(void) {
 	int i, count = 0;
 
 	for(i = 0; i < 128; i++) {
+		printf("%c\n", myRootDir[i].filename[0]);
 		if(myRootDir[i].filename[0] == 0x00)
 			count++;
 	}
 
 	printf("FS Info:\n");
-	printf("total_blk_count=%d\n",mySuperblock->numBlocks);
-	printf("fat_blk_count=%d\n",FAT_blocks);
-	printf("rdir_blk=%d\n", FAT_blocks+1);
-	printf("data_blk=%d\n",FAT_blocks+2 );
+	printf("total_blk_count=%d\n", mySuperblock->numBlocks);
+	printf("fat_blk_count=%d\n", FAT_blocks);
+	printf("rdir_blk=%d\n", FAT_blocks + 1);
+	printf("data_blk=%d\n", FAT_blocks + 2);
 	printf("data_blk_count=%d\n", mySuperblock->numDataBlocks);
-	printf("fat_free_ratio=%d/%d\n", (mySuperblock->numDataBlocks - FAT_blocks),mySuperblock->numDataBlocks );
-	printf("rdir_free_ratio=%d/128\n",count);
+	printf("fat_free_ratio=%d/%d\n", (mySuperblock->numDataBlocks - FAT_blocks), mySuperblock->numDataBlocks);
+	printf("rdir_free_ratio=%d/128\n", count);
 
 	return 0;
 }
@@ -227,12 +243,12 @@ int fs_create(const char *filename) {
 			// initialize file data 
 			strcpy(myRootDir[i].filename, filename);
 			//printf("Filename: %s\n", myRootDir[i].filename);
-			myRootDir[i].fileSize        = 0;
-			myRootDir[i].dataBlockInd    = -1;
-			myRootDir[i].dataBlockInd    = myFAT[0].words;
+			myRootDir[i].fileSize     = 0;
+			myRootDir[i].dataBlockInd = -1;
+			myRootDir[i].dataBlockInd = myFAT[0].words;
 
 			// for debugging purposes
-			printf("Created file: '%s' (%d/%d bytes)\n",(myRootDir+i)->filename,myRootDir[i].fileSize,myRootDir[i].fileSize  );
+			printf("Created file: '%s' (%d/%d bytes)\n", myRootDir[i].filename, myRootDir[i].fileSize, myRootDir[i].fileSize);
 			return 0;
 		}
 	}
@@ -318,12 +334,9 @@ int fs_ls(void) {
 
 	printf("FS Ls:\n");
 	// finds first available file block in root dir 
-
 	for(int i = 0; i < FS_FILE_MAX_COUNT; i++) {
-		printf("Filename: %s\n", myRootDir[i].filename);
-
+		//printf("Filename: %s\n", myRootDir[i].filename);
 		if(myRootDir[i].filename[0] != 0x00) {
-
 			printf("file: %s, size: %d, ", myRootDir[i].filename, myRootDir[i].fileSize);
 			printf("data_blk: %d\n", (myRootDir + i)->dataBlockInd);
 														
@@ -526,24 +539,24 @@ int error_check(const char *filename){
 	if(size > FS_FILENAME_LEN){
 		fs_error("File name is longer than FS_FILE_MAX_COUNT\n");
 		return -1;
-		}
+	}
 
 	// check if file already exists 
 	int same_char = 0;
 	int files_in_rootdir = 0;
 	for(int i = 0; i < FS_FILE_MAX_COUNT; i++){
 		for(int j = 0; j < size; j ++){
-			if((myRootDir + i)->filename[j] == filename[j])
+			if(myRootDir[i].filename[j] == filename[j])
 				same_char++;
 		}
-		if((myRootDir + i)->filename[0] != 0x00)
+		if(myRootDir[i].filename[0] != 0x00)
 			files_in_rootdir++;
-		}
+	}
 	// File already exists
 	if(same_char == size){
 		fs_error("file @[%s] already exists\n", filename);
 		return -1;
-		}
+	}
 		
 
 	// if there are 128 files in rootdirectory 
