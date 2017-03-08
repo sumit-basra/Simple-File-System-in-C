@@ -58,7 +58,7 @@ struct superblock_t {
 
 struct FAT_t {
 	uint16_t words;
-} __attribute__((packed));
+} __attribute__((packed));			// if this is all you have for fat, then just make it  uint16_t *myFat;
 
 struct rootdirectory_t {
 	char    filename[FS_FILENAME_LEN];
@@ -72,8 +72,8 @@ struct file_descriptor_t {
     bool   is_used;       
     int    file_index;              
     size_t offset;  
-	char   file_name[FS_FILENAME_LEN];
-	struct rootdirectory_t *dir_ptr;         
+	char   file_name[FS_FILENAME_LEN]; // we may not need this
+	//struct rootdirectory_t *dir_ptr;   // we may not need this      
 };
 
 
@@ -83,8 +83,9 @@ struct FAT_t             *myFAT;
 struct file_descriptor_t fd_table[FS_OPEN_MAX_COUNT]; 
 
 // private API
-int error_check(const char *filename);
+bool error_free(const char *filename);
 int locate_file(const char* file_name);
+bool is_open(const char* file_name);
 int locate_avail_fd();
 
 /* Makes the file system contained in the specified virtual disk "ready to be used" */
@@ -139,10 +140,9 @@ int fs_mount(const char *diskname) {
 	// initialize file descriptors 
     for(int i = 0; i < FS_OPEN_MAX_COUNT; i++) {
 		fd_table[i].is_used = false;
-		fd_table[i].dir_ptr = NULL;
+		//fd_table[i].dir_ptr = NULL;
 	}
         
-
 	return 0;
 }
 
@@ -150,21 +150,26 @@ int fs_mount(const char *diskname) {
 /* Makes sure that the virtual disk is properly closed and that all the internal data structures of the FS layer are properly cleaned. */
 int fs_umount(void) {
 
-	if(!mySuperblock){
-		fs_error("No disk available to unmount\n");
+	if(!mySuperblock){// PRETTY SURE THIS STAYS THE SAME, DONT HAVE TO WRITE TO DISK, only dir and data change
+		fs_error("No disk available to unmount\n");	
 		return -1;
 	}
 
+	// write super block
 	if(block_write(0, mySuperblock) < 0) {
 		fs_error("failure to write to block \n");
 		return -1;
 	}
+
+	// write FAT
 	for(int i = 1; i <= mySuperblock->numFAT; i++) {
 		if(block_write(i, myFAT + (i * BLOCK_SIZE)) < 0) {
 			fs_error("failure to write to block \n");
 			return -1;
 		}
 	}
+
+	// write root dir 
 	if(block_write(mySuperblock->numFAT + 1, myFAT) < 0){
 		fs_error("failure to write to block \n");
 		return -1;
@@ -179,11 +184,10 @@ int fs_umount(void) {
 		fd_table[i].offset = 0;
 		fd_table[i].is_used = false;
 		fd_table[i].file_index = -1;
-		strcpy(fd_table[i].file_name, "");
+		strcpy(fd_table[i].file_name, "\0");
     }
 
-	block_disk_close();
-	return 0;
+	return block_disk_close();
 }
 
 /* 
@@ -232,7 +236,7 @@ Create a new file:
 int fs_create(const char *filename) {
 
 	// perform error checking first 
-	if(error_check(filename) < 0)
+	if(error_free(filename) == false)
 		return -1;
 
 
@@ -257,30 +261,12 @@ int fs_create(const char *filename) {
 
 /*
 Remove File:
-	1. Empty file entry and all its datablocks associated with file contents from FAT.
+	1. Empty file entry and and confirm some error checking.
 	2. Free associated data blocks
-
 */
-
 int fs_delete(const char *filename) {
 
-	// confirm existing filename
-	int file_index = locate_file(filename);
-
-	if (file_index == -1) {
-		fs_error("file @[%s] doesnt exist\n", filename);
-        return -1;
-	}
-
-	struct rootdirectory_t* the_dir = &myRootDir[file_index]; 
-	int i;
-	for(i = 0; i < FS_OPEN_MAX_COUNT; i++) {
-		if(strncmp(the_dir->filename, fd_table[i].file_name, FS_FILENAME_LEN) == 0) {
-			fs_error("cannot remove file @[%s] as it is currently open\n", filename);
-			return -1;
-		}
-	}
-
+	if (!is_open(filename)) return -1;
 
 	/*
 	Free associated blocks 
@@ -295,14 +281,17 @@ int fs_delete(const char *filename) {
 		5. Write to block with new changes 
 		6. Reset file attribute data
 	*/
+
+	int file_index = locate_file(filename);
+	struct rootdirectory_t* the_dir = &myRootDir[file_index]; 
 	int frst_dta_blk_i = the_dir->dataBlockInd;
 	int num_blocks = the_dir->fileSize / BLOCK_SIZE;
 
 	char buf1[BLOCK_SIZE] = "";
 	char buf2[BLOCK_SIZE] = "";
 
-	block_read(mySuperblock->dataInd, buf1);		//??
-	block_read(mySuperblock->dataInd + 1, buf2);	//??
+	block_read(mySuperblock->dataInd, buf1);		
+	block_read(mySuperblock->dataInd + 1, buf2);	
 
 	for (int i = 0; i < num_blocks; i++) {
 		if (frst_dta_blk_i < BLOCK_SIZE)
@@ -532,13 +521,13 @@ int locate_avail_fd() {
  * 3) Check if root directory has max number of files 
 */
 
-int error_check(const char *filename){
+bool error_free(const char *filename){
 
 	// get size 
 	int size = strlen(filename);
 	if(size > FS_FILENAME_LEN){
 		fs_error("File name is longer than FS_FILE_MAX_COUNT\n");
-		return -1;
+		return false;
 	}
 
 	// check if file already exists 
@@ -555,16 +544,36 @@ int error_check(const char *filename){
 	// File already exists
 	if(same_char == size){
 		fs_error("file @[%s] already exists\n", filename);
-		return -1;
+		return false;
 	}
 		
 
 	// if there are 128 files in rootdirectory 
 	if(files_in_rootdir == FS_FILE_MAX_COUNT){
 		fs_error("All files in rootdirectory are taken\n");
-		return -1;
+		return false;
 	}
 		
+	return true;
+}
 
-	return 0;
+
+bool is_open(const char* filename)
+{
+	int file_index = locate_file(filename);
+
+	if (file_index == -1) {
+		fs_error("file @[%s] doesnt exist\n", filename);
+        return false;
+	}
+
+	struct rootdirectory_t* the_dir = &myRootDir[file_index]; 
+	for(int i = 0; i < FS_OPEN_MAX_COUNT; i++) {
+		if(strncmp(the_dir->filename, fd_table[i].file_name, FS_FILENAME_LEN) == 0) {
+			fs_error("cannot remove file @[%s] as it is currently open\n", filename);
+			return false;
+		}
+	}
+
+	return true;
 }
