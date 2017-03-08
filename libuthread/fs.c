@@ -91,6 +91,10 @@ bool is_open(const char* file_name);
 int locate_avail_fd();
 int get_num_FAT_free_blocks();
 
+// return -1 if there is a next block to read 
+// or other wise >= 0 for the new fd offset pos to be set
+int read_next_block_to_buffer(void *buf, int **cur_buf_pos);
+
 // Makes the file system contained in the specified virtual disk "ready to be used
 int fs_mount(const char *diskname) {
 
@@ -304,8 +308,11 @@ int fs_delete(const char *filename) {
 			buf1[frst_dta_blk_i] = '\0';
 		else buf2[frst_dta_blk_i - BLOCK_SIZE] = '\0';
 		
-		// todo: implement find_next_block
-		//frst_dta_blk_i = find_next_block(the_dir->dataBlockInd, file_index);
+		// todo: need to find a way to read in the next 
+		// block for larger files 
+		
+		// the information here is stored in that FAT fd_table 
+		// directory so those are the only blocks we need to reference
 	}
 
 	myRootDir[file_index].dataBlockInd = -1;
@@ -455,10 +462,14 @@ int fs_write(int fd, void *buf, size_t count) {
 }
 
 /*
-Read a File:
+Read a File: (will clean up later)
 	1. Error check that the amount to be read is > 0, and that the
 	   the file descriptor is valid.
 */
+int fs_read(int fd, void *buf, size_t count) {
+	return 0;
+}
+/* commenting b/c buggy
 int fs_read(int fd, void *buf, size_t count) {
 	
     if(fd_table[fd].is_used == false || count <= 0) {
@@ -474,26 +485,92 @@ int fs_read(int fd, void *buf, size_t count) {
 	struct rootdirectory_t *the_dir = &myRootDir[file_index];
 	int frst_dta_blk_i = the_dir->dataBlockInd;
 	
-	int num_blocks = 0;
+	int cur_num_blocks_read = 0;
 
+	// start with initial block i
 	// get to the correct offset by continuing 
 	// to read past block by block 
 	while (cur_offset >= BLOCK_SIZE) {
-		// todo: implement find_next_block
-		//frst_dta_blk_i = find_next_block(the_dir->dataBlockInd, file_index);
-		num_blocks++;
+		// todo: implement find_next_block for larger files
+		//frst_dta_blk_i = find_next_block(frst_dta_blk_i, file_index);
+		cur_num_blocks_read++;
 		cur_offset -= BLOCK_SIZE;
 	}
 
-	// the finally do a read once your at the proper block index
-	char *read_buf = buf;
-	block_read(frst_dta_blk_i, read_buf);
+	// the finally do a read once your at the proper block that contains file
+	char *temp_blk[BLOCK_SIZE] = "";
+	block_read(frst_dta_blk_i, temp_blk);
 
+	// first go to the correct block, and then seek the correct offset in the block 
+	int iter = 0;
+	int next_db_instance = frst_dta_blk_i; // start us off
+	// starting reading starting from offset of the correct block 
+	// a block offset can start anywhere 
+	for (int off_s = cur_offset; i < BLOCK_SIZE; i++) {
+		// store the contents into the buffer piece by piece from first block
+		// ill probabely modularize this part into a function later
+		buf[iter++] = temp_blk[off_s];
 
+		// if we exceed the number of bytes (count) that is required to write in the block
+		// that means that the contents of the file are only within that single block
+		// so we can stop here after 
+		if (iter >= count) {
+			fd_table[fd].offset += iter;
 
-	return 0;
+			// from the header file: 
+			//The file offset of the file descriptor is implicitly incremented by the number of bytes that were actually read. why?
+			
+			// return the number of bytes that were read
+			return iter;
+		}
+	}
+
+	// know we know that the block offset starts from 0 (next new block)
+	// if we are here there are more blocks to read
+	// read block by block
+
+	// continue to read requested amount of bytes, but dont go overboard 
+	int max_blocks = mySuperblock->numDataBlocks;
+	cur_num_blocks_read++;
+	while (iter <= count && cur_num_blocks_read <= max_blocks) {
+		// todo: implement find_next_block for larger files
+		//next_db_instance = find_next_block(next_db_instance, file_index);
+		
+		// reset buffer block
+		strcpy(temp_blk, "");
+		block_read(frst_dta_blk_i, temp_blk);
+		if (read_next_block_to_buffer(buf, &iter, count, fd) = 0) { // exit status
+			fd_table[fd].offset += iter;
+			return iter;
+		} 
+		cur_num_blocks_read++;
+	}
+
+	// otherwise exceeded bounds or in on the very edge of a block 
+	fd_table[fd].offset += iter;
+	return iter;
 }
 
+
+int read_next_block_to_buffer(void *buf, int *cur_buf_pos, int next_block_index, int nbytes, int fd)
+{
+	// reset new block
+	char *temp_blk[BLOCK_SIZE] = "";
+	block_read(frst_dta_blk_i, temp_blk);
+
+	// read full block 
+	for (int cur_block_i = 0 ; cur_block_i < BLOCK_SIZE ; i++ ) {
+		// add to buffer 
+		buf[*(cur_buf_pos)++] = temp_blk[cur_block_i];
+
+		if (cur_buf_pos >= nbytes) {
+			fd_table[fd].offset += iter;
+			return 0; // finished 
+		}
+	}
+	return -1; // not finished 
+}
+*/
 
 /*
 Locate Existing File
