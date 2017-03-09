@@ -58,9 +58,6 @@ struct superblock_t {
 } __attribute__((packed));
 
 
-uint16_t *FAT_entry;
-
-
 struct rootdirectory_t {
 	char    filename[FS_FILENAME_LEN];	// don't use chars, cast as char when needed	
 	int32_t fileSize;
@@ -73,14 +70,13 @@ struct file_descriptor_t {
     bool   is_used;       
     int    file_index;              
     size_t offset;  
-	char   file_name[FS_FILENAME_LEN]; // we may not need this but it make it easier
-	//struct rootdirectory_t *dir_ptr;   // we may not need this      
+	char   file_name[FS_FILENAME_LEN];    
 };
 
 
 struct superblock_t      *mySuperblock;
 struct rootdirectory_t   *myRootDir;
-//struct FAT_t             *myFAT;
+uint16_t 				 *FAT_entry;
 struct file_descriptor_t fd_table[FS_OPEN_MAX_COUNT]; 
 
 // private API
@@ -89,29 +85,27 @@ int locate_file(const char* file_name);
 bool is_open(const char* file_name);
 int locate_avail_fd();
 int get_num_FAT_free_blocks();
+int count_num_open_dir();
 
-// return -1 if there is a next block to read 
-// or other wise >= 0 for the new fd offset pos to be set
-int read_next_block_to_buffer(void *buf, int **cur_buf_pos);
 
-// Makes the file system contained in the specified virtual disk "ready to be used
+/* Makes the file system contained in the specified virtual disk "ready to be used" */
 int fs_mount(const char *diskname) {
 
-	mySuperblock = malloc(sizeof(struct superblock_t));
+	mySuperblock = malloc(BLOCK_SIZE);
 
 	// open disk 
-	if(block_disk_open(diskname) < 0) {
+	if(block_disk_open(diskname) < 0){
 		fs_error("failure to open virtual disk \n");
 		return -1;
 	}
 	
 	// initialize data onto local super block 
-	if(block_read(0, mySuperblock) < 0) {
+	if(block_read(0, (void*)mySuperblock) < 0){
 		fs_error( "failure to read from block \n");
 		return -1;
 	}
 
-	if(strncmp(mySuperblock->signature, "ECS150FS", 8) != 0) {
+	if(strncmp(mySuperblock->signature, "ECS150FS", 8) != 0){
 		fs_error( "invalid disk signature \n");
 		return -1;
 	}
@@ -123,35 +117,22 @@ int fs_mount(const char *diskname) {
 
 
 	// the size of the FAT (in terms of blocks)
-	//int num_FAT_blocks = ceil(double((mySuperblock->numDataBlocks * 2)) / BLOCK_SIZE); 
-	//int num_FAT_blocks = mySuperblock->numFAT;
-	//int num_FAT_blocks = (mySuperblock->numDataBlocks * 2) / BLOCK_SIZE;
-	//if(num_FAT_blocks == 0)
-	//	num_FAT_blocks =1;
-	
-	static uint8_t buffer[BLOCK_SIZE];
-	//uint16_t *temp;
-	FAT_entry = malloc(2* mySuperblock->numDataBlocks);		// 2 bytes * number of datablocks
-	int keep_track = 0;
-	for(int i = 1; i < mySuperblock->rootDirInd; i++) {
-		// read each fat block in the disk starting at position 1
+	int FAT_blocks = ((mySuperblock->numDataBlocks) * 2)/BLOCK_SIZE; 
+	if(FAT_blocks == 0)
+		FAT_blocks = 1;
 
-		if(block_read(i, (void *) buffer) < 0) {
+	FAT_entry = malloc(mySuperblock->numFAT * BLOCK_SIZE);
+	for(int i = 0; i < FAT_blocks; i++) {
+		// read each fat block in the disk starting at position 1
+		if(block_read(i + 1, (void*)FAT_entry + (i * BLOCK_SIZE)) < 0) {
 			fs_error("failure to read from block \n");
 			return -1;
 		}
-		
-		for(int j = 0; j*2 < BLOCK_SIZE; j++){
-			//temp = (((uint16_t*) buffer) + j);
-			FAT_entry[keep_track] = *(((uint16_t*) buffer) + j);                                        
-			keep_track++;
-		}
-		}
+	}
 
 	// root directory creation
-	myRootDir = (struct rootdirectory_t*) malloc(sizeof(struct rootdirectory_t) * FS_FILE_MAX_COUNT);
-	// FAT_blocks is size of fat - Root Directory starts here.
-	if(block_read(mySuperblock->numFAT + 1, myRootDir) < 0) { 
+	myRootDir = malloc(sizeof(struct rootdirectory_t) * FS_FILE_MAX_COUNT);
+	if(block_read(FAT_blocks + 1, (void*)myRootDir) < 0) { // FAT_blocks is size of fat - Root Directory starts here.
 		fs_error("failure to read from block \n");
 		return -1;
 	}
@@ -162,6 +143,7 @@ int fs_mount(const char *diskname) {
 		//fd_table[i].dir_ptr = NULL;
 	}
         
+
 	return 0;
 }
 
@@ -169,29 +151,26 @@ int fs_mount(const char *diskname) {
 /* Makes sure that the virtual disk is properly closed and that all the internal data structures of the FS layer are properly cleaned. */
 int fs_umount(void) {
 
-	if(!mySuperblock) {
-		fs_error("No disk available to unmount\n");	
+	if(!mySuperblock){
+		fs_error("No disk available to unmount\n");
 		return -1;
 	}
 
-	// write super block
-	if(block_write(0, mySuperblock) < 0) {
+	if(block_write(0, (void*)mySuperblock) < 0) {
 		fs_error("failure to write to block \n");
 		return -1;
 	}
 
-	// write FAT
-	for(int i = 1; i <= mySuperblock->numFAT; i++) {
-		if(block_write(i, FAT_entry + (i * BLOCK_SIZE)) < 0) {
+	for(int i = 0; i < mySuperblock->numFAT; i++) {
+		if(block_write(i + 1, (void*)FAT_entry + (i * BLOCK_SIZE)) < 0) {
 			fs_error("failure to write to block \n");
 			return -1;
 		}
 	}
 
-	// write root dir 
-	if(block_write(mySuperblock->numFAT + 1, FAT_entry) < 0){
+	if(block_write(mySuperblock->numFAT + 1, (void*)myRootDir) < 0) {
 		fs_error("failure to write to block \n");
-		return -1;
+			return -1;
 	}
 
 	free(mySuperblock);
@@ -203,11 +182,13 @@ int fs_umount(void) {
 		fd_table[i].offset = 0;
 		fd_table[i].is_used = false;
 		fd_table[i].file_index = -1;
-		strcpy(fd_table[i].file_name, "\0");
+		strcpy(fd_table[i].file_name, "");
     }
 
-	return block_disk_close();
+	block_disk_close();
+	return 0;
 }
+
 
 /* 
  * to create a test file system call ./fs.x make test.fs 8192 to 
@@ -217,21 +198,6 @@ int fs_umount(void) {
 /* Display some information about the currently mounted file system. */
 int fs_info(void) {
 
-    // the size of the FAT (in terms of blocks)
-    // we can use the superblock var = numFAT. 
-	//int FAT_blocks = ((mySuperblock->numDataBlocks) * 2)/BLOCK_SIZE;  // use ceil to round up
-	//int FAT_blocks = mySuperblock->numFAT;
-	//if(FAT_blocks == 0)
-	//	FAT_blocks = 1;
-
-	int i, count = 0;
-
-	for(i = 0; i < 128; i++) {
-		//printf("%c\n", myRootDir[i].filename[0]);
-		if(myRootDir[i].filename[0] == EMPTY)
-			count++;
-	}
-
 	printf("FS Info:\n");
 	printf("total_blk_count=%d\n", mySuperblock->numBlocks);
 	printf("fat_blk_count=%d\n", mySuperblock->numFAT);
@@ -239,7 +205,7 @@ int fs_info(void) {
 	printf("data_blk=%d\n", mySuperblock->numFAT + 2);
 	printf("data_blk_count=%d\n", mySuperblock->numDataBlocks);
 	printf("fat_free_ratio=%d/%d\n", get_num_FAT_free_blocks(), mySuperblock->numDataBlocks);
-	printf("rdir_free_ratio=%d/128\n", count);
+	printf("rdir_free_ratio=%d/128\n", count_num_open_dir());
 
 	return 0;
 }
@@ -256,17 +222,17 @@ Create a new file:
 int fs_create(const char *filename) {
 
 	// perform error checking first 
-	if(error_free(filename) == false)
+	if(error_free(filename) == false) {
+		fs_error("error associated with filename");
 		return -1;
-
-
+	}
+		
 	// finds first available empty file
 	for(int i = 0; i < FS_FILE_MAX_COUNT; i++) {
 		if(myRootDir[i].filename[0] == EMPTY) {	
 
 			// initialize file data 
 			strcpy(myRootDir[i].filename, filename);
-			//printf("Filename: %s\n", myRootDir[i].filename);
 			myRootDir[i].fileSize     = 0;
 			myRootDir[i].dataBlockInd = EOC;
 
@@ -275,6 +241,8 @@ int fs_create(const char *filename) {
 			return 0;
 		}
 	}
+
+	fs_error("all root directory mappings are full");
 	return -1;
 }
 
@@ -307,9 +275,14 @@ int fs_delete(const char *filename) {
 	int file_index = locate_file(filename);
 	struct rootdirectory_t* the_dir = &myRootDir[file_index]; 
 	int frst_dta_blk_i = the_dir->dataBlockInd;
-	//int num_blocks = the_dir->fileSize / BLOCK_SIZE;
+
+
+	
+
 /*
-	s
+
+int num_blocks = the_dir->fileSize / BLOCK_SIZE;
+	char buf1[BLOCK_SIZE] = "";
 	char buf2[BLOCK_SIZE] = "";
 
 	block_read(mySuperblock->dataInd, buf1);		
@@ -329,15 +302,17 @@ int fs_delete(const char *filename) {
 	myRootDir[file_index].dataBlockInd = -1;
 
 	block_write(mySuperblock->dataInd, buf1);
-	block_write(mySuperblock->dataInd + 1, buf2);*/
+	block_write(mySuperblock->dataInd + 1, buf2);
+	*/
+	
 
 	// alternatively
 	/*
 	Set FAT entries to EMPTY for all file blocks:
 		1. Store entry of stary of file temporarily
 		2. Set FAT entry to 0x00 to indicate free file 
-		3. Go to the next entry
-	*/
+		3. Go to the next entry*/
+	
 	while (frst_dta_blk_i != EOC) {
 		uint16_t tmp = FAT_entry[frst_dta_blk_i];
 		FAT_entry[frst_dta_blk_i] = EMPTY;
@@ -754,6 +729,17 @@ int get_num_FAT_free_blocks()
 	int count = 0;
 	for (int i = 0; i < mySuperblock->numDataBlocks; i++) {
 		if (FAT_entry[i] == EMPTY) count++;
+	}
+	return count;
+}
+
+
+int count_num_open_dir()
+{
+	int i, count = 0;
+	for(i = 0; i < FS_FILE_MAX_COUNT; i++) {
+		if(myRootDir[i].filename[0] == EMPTY)
+			count++;
 	}
 	return count;
 }
