@@ -28,7 +28,7 @@ echo "Testing ls"
 diff our_ls.txt ref_ls.txt
 
 
-
+./test-fs.x add file1.txt driver 
 
 
 echo -e "\n\n"

@@ -182,7 +182,7 @@ int fs_umount(void) {
 		fd_table[i].offset = 0;
 		fd_table[i].is_used = false;
 		fd_table[i].file_index = -1;
-		strcpy(fd_table[i].file_name, "");
+		memset(fd_table[i].file_name, 0, FS_FILENAME_LEN);
     }
 
 	block_disk_close();
@@ -453,24 +453,58 @@ int fs_lseek(int fd, size_t offset) {
 	return 0;
 }
 
-int fs_write(int fd, void *buf, size_t count) {
 
+int fs_write(int fd, void *buf, size_t count) {
+	if (count <= 0) {
+        fs_error("request nbytes amount is trivial" );
+        return -1;
+	} else if (fd <= -1 || fd >= 4) {
+        fs_error("invalid file descriptor [%d] \n", fd);
+        return -1;
+	} else if (get_num_FAT_free_blocks() == EMPTY) {
+        fs_error("no free entries to write to");
+        return -1;
+	}
+
+/*
+	char *file_name = fd_table[fd].file_name;
+	int file_index = locate_file(file_name);
+	int offset = fd_table[fd].offset;
+
+	struct rootdirectory_t *the_dir = &myRootDir[file_index];
+	int cur_fileSize = the_dir->fileSize;
+
+	int new_blocks;
+	if (offset + count > cur_fileSize) {
+		new_blocks = ((offset + count) / BLOCK_SIZE) - (cur_fileSize / BLOCK_SIZE);
+	} else {
+		new_blocks = 0;
+	}
+
+	int num_blocks = ((count + (offset % BLOCK_SIZE)) / BLOCK_SIZE) + 1;
+	int cur_block = offset/BLOCK_SIZE;
+	int fat_block = the_dir->dataBlockInd;
+
+	char *to_write = (char *)buf;
+	char buffer[BLOCK_SIZE];
+	
+	int amount_left = count;
+	int left_shift;
+	int my_count = 0;
+	int loc = offset % BLOCK_SIZE;
+
+	fat_block = go_to_cur_fat_block(fat_block, cur_block);
+	
+*/
 	return 0;
-	/* TODO: PART 3 - Phase 4 */
 }
+
 
 /*
 Read a File: (will clean up later)
 	1. Error check that the amount to be read is > 0, and that the
 	   the file descriptor is valid.
-
-int fs_read(int fd, void *buf, size_t count) {
-	return 0;
-}
-
 */
-
-
 int fs_read(int fd, void *buf, size_t count) {
 	
 	// error check 
@@ -507,7 +541,7 @@ int fs_read(int fd, void *buf, size_t count) {
 
 	// byte level
 	int loc = offset % BLOCK_SIZE;
-	char temp_buf[BLOCK_SIZE];
+	char bounce_buff[BLOCK_SIZE];
 		
 	// go to correct current block in fat entry 		
 	for (int i = 0; i < cur_block; i++) {
@@ -525,8 +559,8 @@ int fs_read(int fd, void *buf, size_t count) {
 		}
 
 		// read file contents 
-		block_read(FAT_iter + mySuperblock->numFAT, temp_buf);
-		memcpy(read_buf, temp_buf + loc, left_shift);
+		block_read(FAT_iter + mySuperblock->numFAT, bounce_buff);
+		memcpy(read_buf, bounce_buff + loc, left_shift);
 
 		// position array to left block 
 		cont += left_shift;
@@ -742,4 +776,16 @@ int count_num_open_dir()
 			count++;
 	}
 	return count;
+}
+
+int go_to_cur_fat_block(int cur_fat_index, int iter_amount)
+{
+	for (int i = 0; i < iter_amount; i++) {
+		if (cur_fat_index == EOC) {
+			fs_error("attempted to exceed end of file chain");
+			return -1;
+		}
+		cur_fat_index = FAT_entry[cur_fat_index];
+	}
+	return cur_fat_index;
 }
