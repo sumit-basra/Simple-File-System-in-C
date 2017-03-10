@@ -1,24 +1,30 @@
-CFLAGS  = -g -Wall -Werror -lm
+TARGET  := libuthread.a
+OBJS    := queue.o disk.o fs.o context.o uthread.o
 
-all: libuthread.a
+CC      := gcc 
+CFLAGS  := -Werror 
+CFLAGS  := -Wall 
+CFLAGS  += -g 
 
-libuthread.a: queue.o context.o uthread.o fs.o disk.o
-	ar crs libuthread.a queue.o context.o uthread.o fs.o disk.o
+LIBFLAGS = -rcs
 
-queue.o: queue.c queue.h 
-	gcc $(CFLAGS) -c queue.c
+ifneq ($(V),1) 
+Q = @ 
+endif
 
-context.o: context.c context.h
-	gcc $(CFLAGS) -c context.c
+DEPS := $(patsubst %.o,%.d,$(OBJS)) 
+-include $(DEPS)
 
-uthread.o: uthread.c uthread.h
-	gcc $(CFLAGS) -c uthread.c
+all: $(TARGET) $(OBJS)
 
-fs.o: fs.c fs.h
-	gcc $(CFLAGS) -c fs.c -lm
-
-disk.o: disk.c disk.h
-	gcc $(CFLAGS) -c disk.c
+libuthread.a: $(OBJS)
+	@echo "AR $@"
+	@ar $(LIBFLAGS) $(TARGET) $^
+    
+%.o: %.c
+	@echo "CC $@"
+	$(Q)$(CC) $(CFLAGS) -c -o $@ $< -MMD -MF $(@:.o=.d)
 
 clean:
-	rm -f *.o libuthread.a
+	@echo "CLEAN" 
+	$(Q)rm -f $(TARGET) $(OBJS) $(DEPS)
