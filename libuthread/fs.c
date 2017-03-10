@@ -214,30 +214,6 @@ Create a new file:
 
 int fs_create(const char *filename) {
 
-	// // perform error checking first 
-	// if(error_free(filename) == false) {
-	// 	fs_error("error associated with filename");
-	// 	return -1;
-	// }
-
-	// // finds first available empty file
-	// for(int i = 0; i < FS_FILE_MAX_COUNT; i++) {
-	// 	if(myRootDir[i].filename[0] == EMPTY) {	
-
-	// 		// initialize file data 
-	// 		strcpy(myRootDir[i].filename, filename);
-	// 		myRootDir[i].fileSize     = 0;
-	// 		myRootDir[i].dataBlockInd = EOC;
-
-	// 		// for debugging purposes
-	// 		printf("Created file: '%s' (%d/%d bytes)\n", myRootDir[i].filename, myRootDir[i].fileSize, myRootDir[i].fileSize);
-	// 		return 0;
-	// 	}
-	// }
-
-	// fs_error("all root directory mappings are full");
-	// return -1;
-
 	// perform error checking first 
 	if(error_free(filename) == false) {
 		fs_error("error associated with filename");
@@ -246,7 +222,7 @@ int fs_create(const char *filename) {
 
 	// finds first available empty file
 	for(int i = 0; i < FS_FILE_MAX_COUNT; i++) {
-		if(myRootDir[i].filename[0] == 0x00) {	
+		if(myRootDir[i].filename[0] == EMPTY) {	
 
 			// initialize file data 
 			strcpy(myRootDir[i].filename, filename);
@@ -420,15 +396,17 @@ int fs_write(int fd, void *buf, size_t count) {
 	if (count <= 0) {
         fs_error("request nbytes amount is trivial" );
         return -1;
-	} else if (fd <= -1 || fd >= 4) {
+	} else if (fd <= -1 || fd >= FS_OPEN_MAX_COUNT) {
         fs_error("invalid file descriptor [%d] \n", fd);
         return -1;
 	} else if (get_num_FAT_free_blocks() == EMPTY) {
         fs_error("no free entries to write to");
         return -1;
+	} else if (fd_table[fd].is_used == false) {
+        fs_error("file descriptor is not open");
+        return -1;
 	}
 
-/*
 	char *file_name = fd_table[fd].file_name;
 	int file_index = locate_file(file_name);
 	int offset = fd_table[fd].offset;
@@ -436,31 +414,50 @@ int fs_write(int fd, void *buf, size_t count) {
 	struct rootdirectory_t *the_dir = &myRootDir[file_index];
 	int cur_fileSize = the_dir->fileSize;
 
-	int new_blocks;
+	//int new_blocks;
 	if (offset + count > cur_fileSize) {
-		new_blocks = ((offset + count) / BLOCK_SIZE) - (cur_fileSize / BLOCK_SIZE);
+		//new_blocks = ((offset + count) / BLOCK_SIZE) - (cur_fileSize / BLOCK_SIZE);
 	} else {
-		new_blocks = 0;
+		//new_blocks = 0;
 	}
 
 	int num_blocks = ((count + (offset % BLOCK_SIZE)) / BLOCK_SIZE) + 1;
 	int cur_block = offset/BLOCK_SIZE;
 	int fat_block = the_dir->dataBlockInd;
 
-	char *to_write = (char *)buf;
-	char buffer[BLOCK_SIZE];
+	char *write_buf = (char *)buf;
+	char bounce_buff[BLOCK_SIZE];
 	
-	int amount_left = count;
+	int amount_to_write = count;
 	int left_shift;
-	int my_count = 0;
+	int total_byte_written = 0;
 	int loc = offset % BLOCK_SIZE;
 
 	fat_block = go_to_cur_fat_block(fat_block, cur_block);
 	
-*/
-	return 0;
+	for (int i = 0; i < num_blocks; i++) {
+		if (loc + amount_to_write > BLOCK_SIZE) {
+			left_shift = BLOCK_SIZE - loc;
+		} else {
+			left_shift = amount_to_write;
+		}
 
+		//0000000000000000000000000000000000dadadsdadsadasasd
+		// 									^ bouce_buff + loc 
+		memcpy(bounce_buff + loc, write_buf, left_shift);
+		block_write(fat_block + mySuperblock->rootDirInd + 1, (void*)bounce_buff);
+		
+		// position array to left block 
+		total_byte_written += left_shift;
+		write_buf += left_shift;
 
+		// ---> if not funcall is_fin_func <--- :)
+		loc = 0;
+		fat_block = myFAT[fat_block].words;
+		amount_to_write -= left_shift;
+	}
+
+	return total_byte_written;
 }
 
 /*
@@ -513,7 +510,7 @@ int fs_read(int fd, void *buf, size_t count) {
 
 	// read through the number of blocks it contains
 	int left_shift = 0;
-	int cont = 0;
+	int total_bytes_read = 0;
 	for (int i = 0; i < num_blocks; i++) {
 		if (loc + amount_to_read > BLOCK_SIZE) {
 			left_shift = BLOCK_SIZE - loc;
@@ -526,7 +523,7 @@ int fs_read(int fd, void *buf, size_t count) {
 		memcpy(read_buf, bounce_buff + loc, left_shift);
 
 		// position array to left block 
-		cont += left_shift;
+		total_bytes_read += left_shift;
 		read_buf += left_shift;
 
 		// next block starts at the top
@@ -539,8 +536,8 @@ int fs_read(int fd, void *buf, size_t count) {
 		amount_to_read -= left_shift;
 	}
 
-	fd_table[fd].offset += cont;
-	return cont;
+	fd_table[fd].offset += total_bytes_read;
+	return total_bytes_read;
 }
 
 
@@ -553,7 +550,7 @@ int locate_file(const char* file_name) {
 	int i;
     for(i = 0; i < FS_FILE_MAX_COUNT; i++) 
         if(strncmp(myRootDir[i].filename, file_name, FS_FILENAME_LEN) == 0 &&  
-			      myRootDir[i].filename != 0x00) 
+			      myRootDir[i].filename != EMPTY) 
             return i;  
     return -1;      
 }
