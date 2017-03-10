@@ -1,5 +1,5 @@
 # Target programs
-programs := test-fs.x
+programs := test-fs.x my-test.x
 
 # User-level thread library
 UTHREADLIB=libuthread
@@ -27,12 +27,11 @@ CUR_PWD := $(shell pwd)
 CC	= gcc
 
 # General gcc options
-CFLAGS	:= -Wall -Werror 
+CFLAGS	:= -Werror
 CFLAGS	+= -O2
 #CFLAGS	+= -O0
-#CFLAGS	+= -g
+CFLAGS	+= -g
 CFLAGS	+= -pipe
-CFLAGS	+= -lm
 
 # Include path
 INCLUDE := -I$(UTHREADLIB)
