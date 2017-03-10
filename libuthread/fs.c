@@ -16,9 +16,9 @@
 #define EOC 0xFFFF
 #define EMPTY 0
 
+typedef enum { false, true } bool;
 
 /* 
- * 
  * Superblock:
  * The superblock is the first block of the file system. Its internal format is:
  * Offset	Length (bytes)	Description
@@ -30,11 +30,31 @@
  * 0x10		1				Number of blocks for FAT
  * 0x11		4079			Unused/Padding
  *
- *
- *
+ */
+
+struct superblock_t {
+    char     signature[8];
+    uint16_t num_blocks;
+    uint16_t root_dir_index;
+    uint16_t data_start_index;
+    uint16_t num_data_blocks;
+    uint8_t  num_FAT_blocks; 
+    uint8_t  unused[4079];
+} __attribute__((packed));
+
+
+/*
  * FAT:
  * The FAT is a flat array, possibly spanning several blocks, which entries are composed of 16-bit unsigned words. 
  * There are as many entries as data *blocks in the disk.
+*/
+
+struct FAT_t {
+	uint16_t words;
+};
+
+
+/* 
  *
  * Root Directory:
  * Offset	Length (bytes)	Description
@@ -45,28 +65,13 @@
  *
  */
 
-typedef enum { false, true } bool;
-
-struct superblock_t {
-    char     signature[8];
-    uint16_t numBlocks;
-    uint16_t rootDirInd;
-    uint16_t dataInd;
-    uint16_t numDataBlocks;
-    uint8_t  numFAT; 
-    uint8_t  unused[4079];
-} __attribute__((packed));
-
-struct FAT_t {
-	uint16_t words;
-};
-
 struct rootdirectory_t {
 	char     filename[FS_FILENAME_LEN];
-	uint32_t fileSize;
-	uint16_t dataBlockInd;
+	uint32_t file_size;
+	uint16_t start_data_block;
 	uint8_t  unused[10];
 } __attribute__((packed));
+
 
 struct file_descriptor_t {
     bool   is_used;       
@@ -76,25 +81,26 @@ struct file_descriptor_t {
 };
 
 
-struct superblock_t      *mySuperblock;
-struct rootdirectory_t   *myRootDir;
-struct FAT_t             *myFAT;
+struct superblock_t      *superblock;
+struct rootdirectory_t   *root_dir_block;
+struct FAT_t             *FAT_blocks;
 struct file_descriptor_t fd_table[FS_OPEN_MAX_COUNT]; 
 
+
 // private API
-bool  error_free(const char *filename);
-int  locate_file(const char* file_name);
-bool is_open(const char* file_name);
-int  locate_avail_fd();
-int  get_num_FAT_free_blocks();
-int  count_num_open_dir();
-int  go_to_cur_fat_block(int cur_fat_index, int iter_amount);
+static bool error_free(const char *filename);
+static int  locate_file(const char* file_name);
+static bool is_open(const char* file_name);
+static int  locate_avail_fd();
+static int  get_num_FAT_free_blocks();
+static int  count_num_open_dir();
+static int  go_to_cur_FAT_block(int cur_fat_index, int iter_amount);
 
 
 /* Makes the file system contained in the specified virtual disk "ready to be used" */
 int fs_mount(const char *diskname) {
 
-	mySuperblock = malloc(BLOCK_SIZE);
+	superblock = malloc(BLOCK_SIZE);
 
 	// open disk dd
 	if(block_disk_open(diskname) < 0){
@@ -103,35 +109,35 @@ int fs_mount(const char *diskname) {
 	}
 	
 	// initialize data onto local super block 
-	if(block_read(0, (void*)mySuperblock) < 0){
+	if(block_read(0, (void*)superblock) < 0){
 		fs_error( "failure to read from block \n");
 		return -1;
 	}
 	// check for correct signature
-	if(strncmp(mySuperblock->signature, "ECS150FS", 8) != 0){
+	if(strncmp(superblock->signature, "ECS150FS", 8) != 0){
 		fs_error( "invalid disk signature \n");
 		return -1;
 	}
 	// check for correct number of blocks on disk
-	if(mySuperblock->numBlocks != block_disk_count()) {
+	if(superblock->num_blocks != block_disk_count()) {
 		fs_error("incorrect block disk count \n");
 		return -1;
 	}
 
 	// initialize data onto local FAT blocks
-	myFAT = malloc(mySuperblock->numFAT * BLOCK_SIZE);
-	for(int i = 0; i < mySuperblock->numFAT; i++) {
+	FAT_blocks = malloc(superblock->num_FAT_blocks * BLOCK_SIZE);
+	for(int i = 0; i < superblock->num_FAT_blocks; i++) {
 		// read each fat block in the disk starting at position 1
-		if(block_read(i + 1, (void*)myFAT + (i * BLOCK_SIZE)) < 0) {
+		if(block_read(i + 1, (void*)FAT_blocks + (i * BLOCK_SIZE)) < 0) {
 			fs_error("failure to read from block \n");
 			return -1;
 		}
 	}
 
 	// initialize data onto local root directory block
-	myRootDir = malloc(sizeof(struct rootdirectory_t) * FS_FILE_MAX_COUNT);
+	root_dir_block = malloc(sizeof(struct rootdirectory_t) * FS_FILE_MAX_COUNT);
 	// read the root directory block in the disk starting after the last FAT block
-	if(block_read(mySuperblock->numFAT + 1, (void*)myRootDir) < 0) { 
+	if(block_read(superblock->num_FAT_blocks + 1, (void*)root_dir_block) < 0) { 
 		fs_error("failure to read from block \n");
 		return -1;
 	}
@@ -141,7 +147,6 @@ int fs_mount(const char *diskname) {
 		fd_table[i].is_used = false;
 	}
         
-
 	return 0;
 }
 
@@ -149,31 +154,31 @@ int fs_mount(const char *diskname) {
 /* Makes sure that the virtual disk is properly closed and that all the internal data structures of the FS layer are properly cleaned. */
 int fs_umount(void) {
 
-	if(!mySuperblock){
+	if(!superblock){
 		fs_error("No disk available to unmount\n");
 		return -1;
 	}
 
-	if(block_write(0, (void*)mySuperblock) < 0) {
+	if(block_write(0, (void*)superblock) < 0) {
 		fs_error("failure to write to block \n");
 		return -1;
 	}
 
-	for(int i = 0; i < mySuperblock->numFAT; i++) {
-		if(block_write(i + 1, (void*)myFAT + (i * BLOCK_SIZE)) < 0) {
+	for(int i = 0; i < superblock->num_FAT_blocks; i++) {
+		if(block_write(i + 1, (void*)FAT_blocks + (i * BLOCK_SIZE)) < 0) {
 			fs_error("failure to write to block \n");
 			return -1;
 		}
 	}
 
-	if(block_write(mySuperblock->numFAT + 1, (void*)myRootDir) < 0) {
+	if(block_write(superblock->num_FAT_blocks + 1, (void*)root_dir_block) < 0) {
 		fs_error("failure to write to block \n");
 			return -1;
 	}
 
-	free(mySuperblock);
-	free(myRootDir);
-	free(myFAT);
+	free(superblock);
+	free(root_dir_block);
+	free(FAT_blocks);
 
 	// reset file descriptors
     for(int i = 0; i < FS_OPEN_MAX_COUNT; i++) {
@@ -192,12 +197,12 @@ int fs_umount(void) {
 int fs_info(void) {
 
 	printf("FS Info:\n");
-	printf("total_blk_count=%d\n", mySuperblock->numBlocks);
-	printf("fat_blk_count=%d\n", mySuperblock->numFAT);
-	printf("rdir_blk=%d\n", mySuperblock->numFAT + 1);
-	printf("data_blk=%d\n", mySuperblock->numFAT + 2);
-	printf("data_blk_count=%d\n", mySuperblock->numDataBlocks);
-	printf("fat_free_ratio=%d/%d\n", get_num_FAT_free_blocks(), mySuperblock->numDataBlocks);
+	printf("total_blk_count=%d\n", superblock->num_blocks);
+	printf("fat_blk_count=%d\n", superblock->num_FAT_blocks);
+	printf("rdir_blk=%d\n", superblock->num_FAT_blocks + 1);
+	printf("data_blk=%d\n", superblock->num_FAT_blocks + 2);
+	printf("data_blk_count=%d\n", superblock->num_data_blocks);
+	printf("fat_free_ratio=%d/%d\n", get_num_FAT_free_blocks(), superblock->num_data_blocks);
 	printf("rdir_free_ratio=%d/128\n", count_num_open_dir());
 
 	return 0;
@@ -222,28 +227,27 @@ int fs_create(const char *filename) {
 
 	// finds first available empty file
 	for(int i = 0; i < FS_FILE_MAX_COUNT; i++) {
-		if(myRootDir[i].filename[0] == EMPTY) {	
+		if(root_dir_block[i].filename[0] == EMPTY) {	
 
 			// initialize file data 
-			strcpy(myRootDir[i].filename, filename);
-			myRootDir[i].fileSize     = 0;
-			myRootDir[i].dataBlockInd = EOC;
+			strcpy(root_dir_block[i].filename, filename);
+			root_dir_block[i].file_size     = 0;
+			root_dir_block[i].start_data_block = EOC;
 
-			// for debugging purposes
-			printf("Created file: '%s' (%d/%d bytes)\n", myRootDir[i].filename, myRootDir[i].fileSize, myRootDir[i].fileSize);
+			/* for debugging purposes
+			printf("Created file: '%s' (%d/%d bytes)\n", root_dir_block[i].filename, root_dir_block[i].file_size, root_dir_block[i].file_size); */
 			return 0;
 		}
 	}
 	return -1;
 }
 
+
 /*
 Remove File:
 	1. Empty file entry and all its datablocks associated with file contents from FAT.
 	2. Free associated data blocks
-
 */
-
 int fs_delete(const char *filename) {
 	
 	if (is_open(filename)) {
@@ -252,38 +256,37 @@ int fs_delete(const char *filename) {
 	}
 
 	int file_index = locate_file(filename);
-	struct rootdirectory_t* the_dir = &myRootDir[file_index]; 
-	int frst_dta_blk_i = the_dir->dataBlockInd;
+	struct rootdirectory_t* the_dir = &root_dir_block[file_index]; 
+	int frst_dta_blk_i = the_dir->start_data_block;
 
-	
 	while (frst_dta_blk_i != EOC) {
-		uint16_t tmp = myFAT[frst_dta_blk_i].words;
-		myFAT[frst_dta_blk_i].words = EMPTY;
+		uint16_t tmp = FAT_blocks[frst_dta_blk_i].words;
+		FAT_blocks[frst_dta_blk_i].words = EMPTY;
 		frst_dta_blk_i = tmp;
 	}
 
 	// reset file to blank slate
 	memset(the_dir->filename, 0, FS_FILENAME_LEN);
-	the_dir->fileSize = 0;
+	the_dir->file_size = 0;
 
 	return 0;
-
 }
+
 
 int fs_ls(void) {
 
 	printf("FS Ls:\n");
 	// finds first available file block in root dir 
 	for(int i = 0; i < FS_FILE_MAX_COUNT; i++) {
-		if(myRootDir[i].filename[0] != 0x00) {
-			printf("file: %s, size: %d, ", myRootDir[i].filename, myRootDir[i].fileSize);
-			printf("data_blk: %d\n", myRootDir[i].dataBlockInd);
-														
+		if(root_dir_block[i].filename[0] != 0x00) {
+			printf("file: %s, size: %d, ", root_dir_block[i].filename, root_dir_block[i].file_size);
+			printf("data_blk: %d\n", root_dir_block[i].start_data_block);
 		}
 	}	
 
 	return 0;
 }
+
 
 /*
 Open and return FD:
@@ -315,8 +318,8 @@ int fs_open(const char *filename) {
 	strcpy(fd_table[fd].file_name, filename); 
 
     return fd;
-
 }
+
 
 /*
 Close FD object:
@@ -345,6 +348,7 @@ int fs_close(int fd) {
 	return 0;
 }
 
+
 /*
 	1. Return the size of the file corresponding to the specified file descriptor.
 */
@@ -362,7 +366,7 @@ int fs_stat(int fd) {
         return -1;
     } 
 
-	return myRootDir[file_index].fileSize;
+	return root_dir_block[file_index].file_size;
 }
 
 /*
@@ -392,6 +396,7 @@ int fs_lseek(int fd, size_t offset) {
 	return 0;
 }
 
+
 int fs_write(int fd, void *buf, size_t count) {
 	if (count <= 0) {
         fs_error("request nbytes amount is trivial" );
@@ -411,19 +416,19 @@ int fs_write(int fd, void *buf, size_t count) {
 	int file_index = locate_file(file_name);
 	int offset = fd_table[fd].offset;
 
-	struct rootdirectory_t *the_dir = &myRootDir[file_index];
-	int cur_fileSize = the_dir->fileSize;
+	struct rootdirectory_t *the_dir = &root_dir_block[file_index];
+	int cur_file_size = the_dir->file_size;
 
 	//int new_blocks;
-	if (offset + count > cur_fileSize) {
-		//new_blocks = ((offset + count) / BLOCK_SIZE) - (cur_fileSize / BLOCK_SIZE);
+	if (offset + count > cur_file_size) {
+		//new_blocks = ((offset + count) / BLOCK_SIZE) - (cur_file_size / BLOCK_SIZE);
 	} else {
 		//new_blocks = 0;
 	}
 
 	int num_blocks = ((count + (offset % BLOCK_SIZE)) / BLOCK_SIZE) + 1;
 	int cur_block = offset/BLOCK_SIZE;
-	int fat_block = the_dir->dataBlockInd;
+	int fat_block = the_dir->start_data_block;
 
 	char *write_buf = (char *)buf;
 	char bounce_buff[BLOCK_SIZE];
@@ -433,7 +438,7 @@ int fs_write(int fd, void *buf, size_t count) {
 	int total_byte_written = 0;
 	int loc = offset % BLOCK_SIZE;
 
-	fat_block = go_to_cur_fat_block(fat_block, cur_block);
+	fat_block = go_to_cur_FAT_block(fat_block, cur_block);
 	
 	for (int i = 0; i < num_blocks; i++) {
 		if (loc + amount_to_write > BLOCK_SIZE) {
@@ -445,7 +450,7 @@ int fs_write(int fd, void *buf, size_t count) {
 		//0000000000000000000000000000000000dadadsdadsadasasd
 		// 									^ bouce_buff + loc 
 		memcpy(bounce_buff + loc, write_buf, left_shift);
-		block_write(fat_block + mySuperblock->rootDirInd + 1, (void*)bounce_buff);
+		block_write(fat_block + superblock->data_start_index, (void*)bounce_buff);
 		
 		// position array to left block 
 		total_byte_written += left_shift;
@@ -453,12 +458,13 @@ int fs_write(int fd, void *buf, size_t count) {
 
 		// ---> if not funcall is_fin_func <--- :)
 		loc = 0;
-		fat_block = myFAT[fat_block].words;
+		fat_block = FAT_blocks[fat_block].words;
 		amount_to_write -= left_shift;
 	}
 
 	return total_byte_written;
 }
+
 
 /*
 Read a File:
@@ -482,17 +488,17 @@ int fs_read(int fd, void *buf, size_t count) {
 	int file_index = locate_file(file_name);
 	size_t offset = fd_table[fd].offset;
 	
-	struct rootdirectory_t *the_dir = &myRootDir[file_index];
+	struct rootdirectory_t *the_dir = &root_dir_block[file_index];
 
 
 	// check if offset of file exceeds the file_size
 	int amount_to_read = 0;
-	if (offset + count > the_dir->fileSize) 
-		amount_to_read = abs(the_dir->fileSize - offset);
+	if (offset + count > the_dir->file_size) 
+		amount_to_read = abs(the_dir->file_size - offset);
 	else amount_to_read = count;
 
 	char *read_buf = (char *)buf;
-	int16_t FAT_iter = the_dir->dataBlockInd;
+	int16_t FAT_iter = the_dir->start_data_block;
 	//size_t num_blocks = ceil(amount_to_read / BLOCK_SIZE);
 	size_t num_blocks = (amount_to_read / BLOCK_SIZE) + 1;
 	
@@ -505,7 +511,7 @@ int fs_read(int fd, void *buf, size_t count) {
 		
 	// go to correct current block in fat entry 		
 	for (int i = 0; i < cur_block; i++) {
-		FAT_iter = myFAT[FAT_iter].words;
+		FAT_iter = FAT_blocks[FAT_iter].words;
 	}
 
 	// read through the number of blocks it contains
@@ -519,7 +525,7 @@ int fs_read(int fd, void *buf, size_t count) {
 		}
 
 		// read file contents 
-		block_read(FAT_iter + mySuperblock->rootDirInd + 1, (void*)bounce_buff);
+		block_read(FAT_iter + superblock->data_start_index, (void*)bounce_buff);
 		memcpy(read_buf, bounce_buff + loc, left_shift);
 
 		// position array to left block 
@@ -530,7 +536,7 @@ int fs_read(int fd, void *buf, size_t count) {
 		loc = 0;
 
 		// next 
-		FAT_iter = myFAT[FAT_iter].words;
+		FAT_iter = FAT_blocks[FAT_iter].words;
 
 		// reduce the amount to read by the amount that was read 
 		amount_to_read -= left_shift;
@@ -546,17 +552,17 @@ Locate Existing File
 	1. Return the first filename that matches the search,
 	   and is in use (contains data).
 */
-int locate_file(const char* file_name) {
+static int locate_file(const char* file_name) {
 	int i;
     for(i = 0; i < FS_FILE_MAX_COUNT; i++) 
-        if(strncmp(myRootDir[i].filename, file_name, FS_FILENAME_LEN) == 0 &&  
-			      myRootDir[i].filename != EMPTY) 
+        if(strncmp(root_dir_block[i].filename, file_name, FS_FILENAME_LEN) == 0 &&  
+			      root_dir_block[i].filename != EMPTY) 
             return i;  
     return -1;      
 }
 
 
-int locate_avail_fd() {
+static int locate_avail_fd() {
 	int i;
 	for(i = 0; i < FS_OPEN_MAX_COUNT; i++) 
         if(fd_table[i].is_used == false) 
@@ -566,13 +572,12 @@ int locate_avail_fd() {
 
 
 /*
- * Perform Error Checking 
- * 1) Check if file length>16
- * 2) Check if file already exists 
- * 3) Check if root directory has max number of files 
+Perform Error Checking 
+	1. Check if file length>16
+	2. Check if file already exists 
+    3. Check if root directory has max number of files 
 */
-
-bool error_free(const char *filename){
+static bool error_free(const char *filename){
 
 	// get size 
 	int size = strlen(filename);
@@ -586,10 +591,10 @@ bool error_free(const char *filename){
 	int files_in_rootdir = 0;
 	for(int i = 0; i < FS_FILE_MAX_COUNT; i++){
 		for(int j = 0; j < size; j ++){
-			if(myRootDir[i].filename[j] == filename[j])
+			if(root_dir_block[i].filename[j] == filename[j])
 				same_char++;
 		}
-		if(myRootDir[i].filename[0] != EMPTY)
+		if(root_dir_block[i].filename[0] != EMPTY)
 			files_in_rootdir++;
 	}
 	// File already exists
@@ -608,7 +613,8 @@ bool error_free(const char *filename){
 	return true;
 }
 
-bool is_open(const char* filename)
+
+static bool is_open(const char* filename)
 {
 	int file_index = locate_file(filename);
 
@@ -617,7 +623,7 @@ bool is_open(const char* filename)
         return true;
 	}
 
-	struct rootdirectory_t* the_dir = &myRootDir[file_index]; 
+	struct rootdirectory_t* the_dir = &root_dir_block[file_index]; 
 	for(int i = 0; i < FS_OPEN_MAX_COUNT; i++) {
 		if(strncmp(the_dir->filename, fd_table[i].file_name, FS_FILENAME_LEN) == 0 
 		   && fd_table[i].is_used) {
@@ -629,33 +635,36 @@ bool is_open(const char* filename)
 	return false;
 }
 
-int get_num_FAT_free_blocks()
+
+static int get_num_FAT_free_blocks()
 {
 	int count = 0;
-	for (int i = 1; i < mySuperblock->numDataBlocks; i++) {
-		if (myFAT[i].words == EMPTY) count++;
+	for (int i = 1; i < superblock->num_data_blocks; i++) {
+		if (FAT_blocks[i].words == EMPTY) count++;
 	}
 	return count;
 }
 
-int count_num_open_dir(){
+
+static int count_num_open_dir(){
 
 	int i, count = 0;
 	for(i = 0; i < FS_FILE_MAX_COUNT; i++) {
-		if(myRootDir[i].filename[0] == EMPTY)
+		if(root_dir_block[i].filename[0] == EMPTY)
 			count++;
 	}
 	return count;
 }
 
-int go_to_cur_fat_block(int cur_fat_index, int iter_amount)
+
+static int go_to_cur_FAT_block(int cur_fat_index, int iter_amount)
 {
 	for (int i = 0; i < iter_amount; i++) {
 		if (cur_fat_index == EOC) {
 			fs_error("attempted to exceed end of file chain");
 			return -1;
 		}
-		cur_fat_index = myFAT[cur_fat_index].words;
+		cur_fat_index = FAT_blocks[cur_fat_index].words;
 	}
 	return cur_fat_index;
 }

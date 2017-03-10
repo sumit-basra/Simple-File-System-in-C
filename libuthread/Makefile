@@ -3,8 +3,9 @@ OBJS    := queue.o disk.o fs.o context.o uthread.o
 
 CC      := gcc 
 CFLAGS  := -Werror 
-CFLAGS  := -Wall 
+CFLAGS  += -Wall 
 CFLAGS  += -g 
+CFLAGS  += -c
 
 LIBFLAGS = -rcs
 
@@ -15,7 +16,7 @@ endif
 DEPS := $(patsubst %.o,%.d,$(OBJS)) 
 -include $(DEPS)
 
-all: $(TARGET) $(OBJS)
+all: $(TARGET)
 
 libuthread.a: $(OBJS)
 	@echo "AR $@"
@@ -23,7 +24,7 @@ libuthread.a: $(OBJS)
     
 %.o: %.c
 	@echo "CC $@"
-	$(Q)$(CC) $(CFLAGS) -c -o $@ $< -MMD -MF $(@:.o=.d)
+	$(Q)$(CC) $(CFLAGS) -o $@ $< -MMD -MF $(@:.o=.d)
 
 clean:
 	@echo "CLEAN" 
