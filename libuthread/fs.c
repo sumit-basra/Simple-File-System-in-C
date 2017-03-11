@@ -95,6 +95,7 @@ static int  locate_avail_fd();
 static int  get_num_FAT_free_blocks();
 static int  count_num_open_dir();
 static int  go_to_cur_FAT_block(int cur_fat_index, int iter_amount);
+static int  get_first_fit_FAT_block();
 
 
 /* Makes the file system contained in the specified virtual disk "ready to be used" */
@@ -482,13 +483,22 @@ int fs_write(int fd, void *buf, size_t count) {
 
 	num_blocks = ((count + (offset % BLOCK_SIZE)) / BLOCK_SIZE) + 1;
 
-	for (int i = 0; i < num_blocks; i++) {
+	int num_free = get_num_FAT_free_blocks();
+	if (num_blocks > num_free) {
+		num_blocks = num_free;
+	}
+
+	bool stop = false;
+	for (int i = 0; i < num_blocks && !stop; i++) {
 		if (location + amount_to_write > BLOCK_SIZE) {
 			left_shift = BLOCK_SIZE - location;
 		} else {
 			left_shift = amount_to_write;
 		}
 
+		if (get_first_fit_FAT_block() == -1) {
+			//stop = true;
+		}
 		//0000000000000000000000000000000000dadadsdadsadasasd
 		// 									^ bouce_buff + location
 		memcpy(bounce_buff + location, write_buf, left_shift);
@@ -721,4 +731,16 @@ static int go_to_cur_FAT_block(int cur_fat_index, int iter_amount)
 		cur_fat_index = FAT_blocks[cur_fat_index].words;
 	}
 	return cur_fat_index;
+}
+
+
+static int get_first_fit_FAT_block()
+{
+	for (int i = 0; i < superblock->num_FAT_blocks; i++) {
+		if (FAT_blocks[i].words == EMPTY) {
+			return i;
+		}
+	}
+
+	return -1;
 }
