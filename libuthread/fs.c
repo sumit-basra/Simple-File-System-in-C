@@ -398,6 +398,7 @@ int fs_lseek(int fd, size_t offset) {
 
 
 int fs_write(int fd, void *buf, size_t count) {
+	// Error Checking 
 	if (count <= 0) {
         fs_error("request nbytes amount is trivial" );
         return -1;
@@ -412,56 +413,109 @@ int fs_write(int fd, void *buf, size_t count) {
         return -1;
 	}
 
-	char *file_name = fd_table[fd].file_name;
-	int file_index = locate_file(file_name);
-	int offset = fd_table[fd].offset;
+	char *file_name = fd_table[fd].file_name;				// get the file corresponding of the fd 
+	int file_index = locate_file(file_name);				// get the index of the file 
+	int offset = fd_table[fd].offset;						// get the offset of file 
 
-	struct rootdirectory_t *the_dir = &root_dir_block[file_index];
-	int cur_file_size = the_dir->file_size;
+	struct rootdirectory_t *the_dir = &root_dir_block[file_index];	// create a ptr struct to root_dir with file entry 
 
-	//int new_blocks;
-	if (offset + count > cur_file_size) {
-		//new_blocks = ((offset + count) / BLOCK_SIZE) - (cur_file_size / BLOCK_SIZE);
-	} else {
-		//new_blocks = 0;
+	int num_blocks = ((count + (offset % BLOCK_SIZE)) / BLOCK_SIZE) + 1; // get number of blocks needed to write to file 
+	int cur_block = offset/BLOCK_SIZE;					// get the current block number 
+	int curr_fat_index = the_dir->start_data_block;
+	//int cur_file_size = the_dir->file_size;					// get file size 
+ 	int extra_blocks;
+	// extra blocks needed for writing
+ 	if(the_dir->file_size != 0){
+
+		int file_width = the_dir->file_size / BLOCK_SIZE;
+		int block_difference = offset + num_blocks * BLOCK_SIZE;
+		extra_blocks = (block_difference / BLOCK_SIZE) - 1;
+		extra_blocks = extra_blocks - file_width;
 	}
+	else
+		extra_blocks = num_blocks;
 
-	int num_blocks = ((count + (offset % BLOCK_SIZE)) / BLOCK_SIZE) + 1;
-	int cur_block = offset/BLOCK_SIZE;
-	int fat_block = the_dir->start_data_block;
-
-	char *write_buf = (char *)buf;
+	char *write_buf = (char*)buf;
 	char bounce_buff[BLOCK_SIZE];
 	
 	int amount_to_write = count;
 	int left_shift;
 	int total_byte_written = 0;
-	int loc = offset % BLOCK_SIZE;
+	int location = offset % BLOCK_SIZE;
 
-	fat_block = go_to_cur_FAT_block(fat_block, cur_block);
-	
+	curr_fat_index = go_to_cur_FAT_block(curr_fat_index, cur_block);
+
+	int available_data_blocks = 0;
+	int fat_block_indices[extra_blocks];
+
+	// locate and store indices of the free blocks
+	for(int j = 0; j < superblock->num_data_blocks; j++){
+		if(FAT_blocks[j].words == 0){
+			fat_block_indices[available_data_blocks] = j;
+			available_data_blocks++;
+		}
+		if(available_data_blocks == extra_blocks)
+			break;
+	}
+
+	// For the case where there are no more availabe data blocks on disk
+	num_blocks = available_data_blocks; 
+
+
+	if(the_dir->start_data_block == EOC) { 
+		curr_fat_index = fat_block_indices[0];
+		the_dir->start_data_block = curr_fat_index;
+	}
+	else {
+		int frst_dta_blk_i = the_dir->start_data_block;
+		while(frst_dta_blk_i != EOC){
+			frst_dta_blk_i = FAT_blocks[frst_dta_blk_i].words;
+		}
+		for(int k =0; k < num_blocks; k++){
+			FAT_blocks[frst_dta_blk_i].words = fat_block_indices[k];
+			frst_dta_blk_i = FAT_blocks[frst_dta_blk_i].words;
+		}
+		FAT_blocks[frst_dta_blk_i].words = EOC;
+
+
+	}
+
+	num_blocks = ((count + (offset % BLOCK_SIZE)) / BLOCK_SIZE) + 1;
+
 	for (int i = 0; i < num_blocks; i++) {
-		if (loc + amount_to_write > BLOCK_SIZE) {
-			left_shift = BLOCK_SIZE - loc;
+		if (location + amount_to_write > BLOCK_SIZE) {
+			left_shift = BLOCK_SIZE - location;
 		} else {
 			left_shift = amount_to_write;
 		}
 
 		//0000000000000000000000000000000000dadadsdadsadasasd
-		// 									^ bouce_buff + loc 
-		memcpy(bounce_buff + loc, write_buf, left_shift);
-		block_write(fat_block + superblock->data_start_index, (void*)bounce_buff);
+		// 									^ bouce_buff + location
+		memcpy(bounce_buff + location, write_buf, left_shift);
+		block_write(curr_fat_index + superblock->data_start_index, (void*)bounce_buff);
 		
 		// position array to left block 
 		total_byte_written += left_shift;
 		write_buf += left_shift;
 
 		// ---> if not funcall is_fin_func <--- :)
-		loc = 0;
-		fat_block = FAT_blocks[fat_block].words;
+		location= 0;
 		amount_to_write -= left_shift;
+		if(i < num_blocks - 1){
+			FAT_blocks[curr_fat_index].words = fat_block_indices[i+1];
+			curr_fat_index = FAT_blocks[curr_fat_index].words;
+		}
+		else{
+			FAT_blocks[curr_fat_index].words = EOC;
+			curr_fat_index = FAT_blocks[curr_fat_index].words;
+		}
+
+	}
+	if(offset + total_byte_written > the_dir->file_size){
+		the_dir->file_size = offset + total_byte_written;
 	}
 
+	fd_table[fd].offset += total_byte_written;
 	return total_byte_written;
 }
 
@@ -506,7 +560,7 @@ int fs_read(int fd, void *buf, size_t count) {
 	int cur_block = offset / BLOCK_SIZE; 
 
 	// byte level
-	int loc = offset % BLOCK_SIZE;
+	int location= offset % BLOCK_SIZE;
 	char bounce_buff[BLOCK_SIZE];
 		
 	// go to correct current block in fat entry 		
@@ -518,22 +572,22 @@ int fs_read(int fd, void *buf, size_t count) {
 	int left_shift = 0;
 	int total_bytes_read = 0;
 	for (int i = 0; i < num_blocks; i++) {
-		if (loc + amount_to_read > BLOCK_SIZE) {
-			left_shift = BLOCK_SIZE - loc;
+		if (location+ amount_to_read > BLOCK_SIZE) {
+			left_shift = BLOCK_SIZE - location;
 		} else {
 			left_shift = amount_to_read;
 		}
 
 		// read file contents 
 		block_read(FAT_iter + superblock->data_start_index, (void*)bounce_buff);
-		memcpy(read_buf, bounce_buff + loc, left_shift);
+		memcpy(read_buf, bounce_buff + location, left_shift);
 
 		// position array to left block 
 		total_bytes_read += left_shift;
 		read_buf += left_shift;
 
 		// next block starts at the top
-		loc = 0;
+		location= 0;
 
 		// next 
 		FAT_iter = FAT_blocks[FAT_iter].words;
@@ -549,7 +603,7 @@ int fs_read(int fd, void *buf, size_t count) {
 
 /*
 Locate Existing File
-	1. Return the first filename that matches the search,
+	1. Return the position of first filename that matches the search,
 	   and is in use (contains data).
 */
 static int locate_file(const char* file_name) {

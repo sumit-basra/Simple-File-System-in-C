@@ -217,8 +217,10 @@ int main()
 	curr_fd = -1;
 
 	/* constantly run filesystem commands in loop */
+	printf("$");
 	while(fgets(buffer, 256, stdin) != NULL) {
 		sscanf(buffer, "%s %s %s %d", command, diskname, filename, &offset);
+		printf("$");
 		if(operation(command, diskname, filename, offset))
 			return -1;
 	}
