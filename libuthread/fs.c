@@ -95,10 +95,9 @@ static int  locate_avail_fd();
 static int  get_num_FAT_free_blocks();
 static int  count_num_open_dir();
 static int  go_to_cur_FAT_block(int cur_fat_index, int iter_amount);
-static int  get_first_fit_FAT_block();
 
 
-/* Makes the file system contained in the specified virtual disk "ready to be used" */
+// Makes the file system contained in the specified virtual disk "ready to be used"
 int fs_mount(const char *diskname) {
 
 	superblock = malloc(BLOCK_SIZE);
@@ -152,7 +151,7 @@ int fs_mount(const char *diskname) {
 }
 
 
-/* Makes sure that the virtual disk is properly closed and that all the internal data structures of the FS layer are properly cleaned. */
+// Makes sure that the virtual disk is properly closed and that all the internal data structures of the FS layer are properly cleaned.
 int fs_umount(void) {
 
 	if(!superblock){
@@ -194,7 +193,7 @@ int fs_umount(void) {
 }
 
 
-/* Display some information about the currently mounted file system. */
+// Display some information about the currently mounted file system.
 int fs_info(void) {
 
 	printf("FS Info:\n");
@@ -217,7 +216,6 @@ Create a new file:
 	2. The name needs to be set, and all other information needs to get reset.
 		2.2 Intitially the size is 0 and pointer to first data block is FAT_EOC.
 */
-
 int fs_create(const char *filename) {
 
 	// perform error checking first 
@@ -235,8 +233,6 @@ int fs_create(const char *filename) {
 			root_dir_block[i].file_size     = 0;
 			root_dir_block[i].start_data_block = EOC;
 
-			/* for debugging purposes
-			printf("Created file: '%s' (%d/%d bytes)\n", root_dir_block[i].filename, root_dir_block[i].file_size, root_dir_block[i].file_size); */
 			return 0;
 		}
 	}
@@ -351,7 +347,10 @@ int fs_close(int fd) {
 
 
 /*
-	1. Return the size of the file corresponding to the specified file descriptor.
+Return the size of the file corresponding to the specified file descriptor.
+	1. Error check
+	2. Locate file from root dir from fd
+	3. Return file size from appropriate root dir 
 */
 int fs_stat(int fd) {
     if(fd >= FS_OPEN_MAX_COUNT || fd < 0 || fd_table[fd].is_used == false) {
@@ -374,6 +373,8 @@ int fs_stat(int fd) {
 Move supplied fd to supplied offset
 	1. Make sure the offset is valid: cannot be less than zero, nor can 
 	   it exceed the size of the file itself.
+	2. Error check 
+	3. Update offset of fd
 */
 int fs_lseek(int fd, size_t offset) {
 	struct file_descriptor_t *fd_obj = &fd_table[fd];
@@ -397,7 +398,7 @@ int fs_lseek(int fd, size_t offset) {
 	return 0;
 }
 
-
+// Write to a file:
 int fs_write(int fd, void *buf, size_t count) {
 	// Error Checking 
 	if (count <= 0) {
@@ -414,28 +415,29 @@ int fs_write(int fd, void *buf, size_t count) {
         return -1;
 	}
 
-	char *file_name = fd_table[fd].file_name;				// get the file corresponding of the fd 
-	int file_index = locate_file(file_name);				// get the index of the file 
-	int offset = fd_table[fd].offset;						// get the offset of file 
+	// find relative information about file 
+	char *file_name = fd_table[fd].file_name;				
+	int file_index = locate_file(file_name);				
+	int offset = fd_table[fd].offset;						
 
-	struct rootdirectory_t *the_dir = &root_dir_block[file_index];	// create a ptr struct to root_dir with file entry 
+	struct rootdirectory_t *the_dir = &root_dir_block[file_index];	
 
-	int num_blocks = ((count + (offset % BLOCK_SIZE)) / BLOCK_SIZE) + 1; // get number of blocks needed to write to file 
-	int cur_block = offset/BLOCK_SIZE;					// get the current block number 
+	int num_blocks = ((count + (offset % BLOCK_SIZE)) / BLOCK_SIZE) + 1; 
+	int cur_block = offset/BLOCK_SIZE;					
 	int curr_fat_index = the_dir->start_data_block;
-	//int cur_file_size = the_dir->file_size;					// get file size 
- 	int extra_blocks;
-	// extra blocks needed for writing
- 	if(the_dir->file_size != 0){
 
+	// find the extra blocks required for writing count 
+	// amount of bytes from buffer 
+ 	int extra_blocks;
+ 	if(the_dir->file_size != 0) {
 		int file_width = the_dir->file_size / BLOCK_SIZE;
 		int block_difference = offset + num_blocks * BLOCK_SIZE;
 		extra_blocks = (block_difference / BLOCK_SIZE) - 1;
 		extra_blocks = extra_blocks - file_width;
 	}
-	else
-		extra_blocks = num_blocks;
+	else extra_blocks = num_blocks;
 
+	// set up information for iterating through blocks
 	char *write_buf = (char*)buf;
 	char bounce_buff[BLOCK_SIZE];
 	
@@ -444,12 +446,14 @@ int fs_write(int fd, void *buf, size_t count) {
 	int total_byte_written = 0;
 	int location = offset % BLOCK_SIZE;
 
+	// get to starting block 
 	curr_fat_index = go_to_cur_FAT_block(curr_fat_index, cur_block);
 
 	int available_data_blocks = 0;
 	int fat_block_indices[extra_blocks];
 
 	// locate and store indices of the free blocks
+	// to avoid overwriting other file contents
 	for(int j = 0; j < superblock->num_data_blocks; j++){
 		if(FAT_blocks[j].words == 0){
 			fat_block_indices[available_data_blocks] = j;
@@ -459,10 +463,11 @@ int fs_write(int fd, void *buf, size_t count) {
 			break;
 	}
 
-	// For the case where there are no more availabe data blocks on disk
+	// for the case where there are no more availabe data blocks on disk
 	num_blocks = available_data_blocks; 
 
-
+	// extending the fat table for a file when it already
+	// contains data 
 	if(the_dir->start_data_block == EOC) { 
 		curr_fat_index = fat_block_indices[0];
 		the_dir->start_data_block = curr_fat_index;
@@ -477,30 +482,24 @@ int fs_write(int fd, void *buf, size_t count) {
 			frst_dta_blk_i = FAT_blocks[frst_dta_blk_i].words;
 		}
 		FAT_blocks[frst_dta_blk_i].words = EOC;
-
-
 	}
 
 	num_blocks = ((count + (offset % BLOCK_SIZE)) / BLOCK_SIZE) + 1;
 
+	// write to the disk as much as we can (dont overload the disk)
 	int num_free = get_num_FAT_free_blocks();
 	if (num_blocks > num_free) {
 		num_blocks = num_free;
 	}
 
-	bool stop = false;
-	for (int i = 0; i < num_blocks && !stop; i++) {
+	// main iteration loop for writing block per block
+	for (int i = 0; i < num_blocks; i++) {
 		if (location + amount_to_write > BLOCK_SIZE) {
 			left_shift = BLOCK_SIZE - location;
 		} else {
 			left_shift = amount_to_write;
 		}
 
-		if (get_first_fit_FAT_block() == -1) {
-			//stop = true;
-		}
-		//0000000000000000000000000000000000dadadsdadsadasasd
-		// 									^ bouce_buff + location
 		memcpy(bounce_buff + location, write_buf, left_shift);
 		block_write(curr_fat_index + superblock->data_start_index, (void*)bounce_buff);
 		
@@ -508,9 +507,10 @@ int fs_write(int fd, void *buf, size_t count) {
 		total_byte_written += left_shift;
 		write_buf += left_shift;
 
-		// ---> if not funcall is_fin_func <--- :)
 		location= 0;
 		amount_to_write -= left_shift;
+
+		// updating the final FAT entry values 
 		if(i < num_blocks - 1){
 			FAT_blocks[curr_fat_index].words = fat_block_indices[i+1];
 			curr_fat_index = FAT_blocks[curr_fat_index].words;
@@ -519,8 +519,9 @@ int fs_write(int fd, void *buf, size_t count) {
 			FAT_blocks[curr_fat_index].words = EOC;
 			curr_fat_index = FAT_blocks[curr_fat_index].words;
 		}
-
 	}
+
+	// update filesize accordingly to how much was written 
 	if(offset + total_byte_written > the_dir->file_size){
 		the_dir->file_size = offset + total_byte_written;
 	}
@@ -563,7 +564,6 @@ int fs_read(int fd, void *buf, size_t count) {
 
 	char *read_buf = (char *)buf;
 	int16_t FAT_iter = the_dir->start_data_block;
-	//size_t num_blocks = ceil(amount_to_read / BLOCK_SIZE);
 	size_t num_blocks = (amount_to_read / BLOCK_SIZE) + 1;
 	
 	// block level
@@ -573,10 +573,8 @@ int fs_read(int fd, void *buf, size_t count) {
 	int location= offset % BLOCK_SIZE;
 	char bounce_buff[BLOCK_SIZE];
 		
-	// go to correct current block in fat entry 		
-	for (int i = 0; i < cur_block; i++) {
-		FAT_iter = FAT_blocks[FAT_iter].words;
-	}
+	// go to correct current block in fat entry
+	FAT_iter = go_to_cur_FAT_block(FAT_iter, cur_block);
 
 	// read through the number of blocks it contains
 	int left_shift = 0;
@@ -678,6 +676,12 @@ static bool error_free(const char *filename){
 }
 
 
+/*
+Is the file open?
+	1. A file is open if...
+		a) The file exists in the root directory
+		b) Its cooresponding file descriptor is active
+*/
 static bool is_open(const char* filename)
 {
 	int file_index = locate_file(filename);
@@ -699,7 +703,7 @@ static bool is_open(const char* filename)
 	return false;
 }
 
-
+// helper: info
 static int get_num_FAT_free_blocks()
 {
 	int count = 0;
@@ -710,6 +714,7 @@ static int get_num_FAT_free_blocks()
 }
 
 
+// helper: info
 static int count_num_open_dir(){
 
 	int i, count = 0;
@@ -721,6 +726,7 @@ static int count_num_open_dir(){
 }
 
 
+// helper: read and write 
 static int go_to_cur_FAT_block(int cur_fat_index, int iter_amount)
 {
 	for (int i = 0; i < iter_amount; i++) {
@@ -733,14 +739,3 @@ static int go_to_cur_FAT_block(int cur_fat_index, int iter_amount)
 	return cur_fat_index;
 }
 
-
-static int get_first_fit_FAT_block()
-{
-	for (int i = 0; i < superblock->num_FAT_blocks; i++) {
-		if (FAT_blocks[i].words == EMPTY) {
-			return i;
-		}
-	}
-
-	return -1;
-}
